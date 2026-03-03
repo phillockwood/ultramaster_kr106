@@ -260,6 +260,12 @@ public:
   float mVelocity = 0.f; // stored from Trigger()
   T* mSyncOut = nullptr;  // scope sync output (pulse on oscillator phase reset)
 
+  // Portamento / glide
+  float mGlidePitch = -100.f;  // current glide pitch (1V/oct); -100 = uninitialized
+  bool  mPortaEnabled = false;
+  float mPortaRateParam = 0.f; // knob value [0,1], stored for SR-change recompute
+  float mPortaCoeff = 0.f;     // per-sample smoothing coeff toward target pitch
+
   float mSampleRate = 44100.f;
 
   // Per-voice component tolerance offsets (fixed at construction).
@@ -284,6 +290,13 @@ public:
     mVcaGainScale = 1.f + rng() * 0.06f;       // ±0.5 dB VCA gain
   }
 
+  void UpdatePortaCoeff()
+  {
+    // Cubic mapping: knob 0→0s, 1→3s glide time constant
+    float t = mPortaRateParam * mPortaRateParam * mPortaRateParam * 3.f;
+    mPortaCoeff = (t > 0.001f) ? expf(-1.f / (t * mSampleRate)) : 0.f;
+  }
+
   // Precomputed sample-rate constants (defaults for 44100 Hz)
   float mLogNyq = 9.30792f;       // log(22050)
   float mInvNyq = 1.f / 22050.f;
@@ -291,9 +304,21 @@ public:
 
   bool GetBusy() const override { return mADSR.GetBusy(); }
 
+  void SetUnisonPitch(double pitch)
+  {
+    mInputs[iplug::kVoiceControlPitch].endValue   = pitch;
+    mInputs[iplug::kVoiceControlPitch].startValue = pitch;
+  }
+
   void Trigger(double level, bool isRetrigger) override
   {
     mVelocity = static_cast<float>(level);
+
+    // Snap glide pitch if portamento is off, or voice has never been triggered
+    float newPitch = static_cast<float>(mInputs[iplug::kVoiceControlPitch].endValue);
+    if (!mPortaEnabled || mGlidePitch < -10.f)
+      mGlidePitch = newPitch;
+
     mADSR.NoteOn();
     if (!isRetrigger)
     {
@@ -324,6 +349,7 @@ public:
     mLogNyq = logf(nyq);
     mInvNyq = 1.f / nyq;
     mMinCPS = 20.f * mInvNyq;
+    UpdatePortaCoeff();
   }
 
   void ProcessSamplesAccumulating(T** inputs, T** outputs,
@@ -334,14 +360,26 @@ public:
     double pitchBend = mInputs[iplug::kVoiceControlPitchBend].endValue;
     float velocity = mVelocity;
 
-    // Convert 1V/oct pitch to Hz (440 * 2^pitch, where pitch=0 at A4)
-    float baseFreq = 440.f * powf(2.f, static_cast<float>(pitch + pitchBend));
+    // Portamento: glide mGlidePitch toward target per sample; otherwise snap once
+    float targetPitch = static_cast<float>(pitch);
+    float baseFreq = 0.f;
+    if (!mPortaEnabled)
+    {
+      mGlidePitch = targetPitch;
+      baseFreq = 440.f * powf(2.f, targetPitch + static_cast<float>(pitchBend));
+    }
 
     // LFO buffer from global modulation (index 0)
     T* lfoBuffer = (nInputs > 0 && inputs[0]) ? inputs[0] : nullptr;
 
     for (int i = startIdx; i < startIdx + nFrames; i++)
     {
+      if (mPortaEnabled)
+      {
+        mGlidePitch = mPortaCoeff * mGlidePitch + (1.f - mPortaCoeff) * targetPitch;
+        baseFreq = 440.f * powf(2.f, mGlidePitch + static_cast<float>(pitchBend));
+      }
+
       float lfo = lfoBuffer ? static_cast<float>(lfoBuffer[i]) : 0.f;
       float env = mADSR.Process();
 

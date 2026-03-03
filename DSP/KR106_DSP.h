@@ -112,6 +112,66 @@ public:
     mSynth.SetPitchBendRange(12); // ±12 semitones for external MIDI
   }
 
+  static double MidiToPitch(int note) { return (note - 69) / 12.0; }
+
+  void TriggerUnisonVoices(int note, int velocity)
+  {
+    double pitch = MidiToPitch(note);
+    float vel = velocity / 127.f;
+    bool anyBusy = false;
+    mSynth.ForEachVoice([&](SynthVoice& sv) { anyBusy |= sv.GetBusy(); });
+
+    mSynth.ForEachVoice([pitch, vel, anyBusy](SynthVoice& sv) {
+      auto& v = dynamic_cast<kr106::Voice<T>&>(sv);
+      v.SetUnisonPitch(pitch);
+      v.Trigger(vel, anyBusy);
+    });
+
+    // MidiSynth::ProcessBlock skips voice processing when mVoicesAreActive==false
+    // and the MIDI queue is empty. Push a no-op CC to keep the queue non-empty so
+    // voices we triggered directly are processed on the next audio block.
+    // (CC#0 with value 0 goes through kControllerAction → Voice::SetControl which is a no-op.)
+    IMidiMsg wakeup;
+    wakeup.MakeControlChangeMsg(IMidiMsg::EControlChangeMsg(0), 0, 0);
+    mSynth.AddMidiMsgToQueue(wakeup);
+  }
+
+  void ReleaseUnisonVoices()
+  {
+    mSynth.ForEachVoice([](SynthVoice& sv) { sv.Release(); });
+  }
+
+  void SendToSynth(int note, bool noteOn, int velocity, int offset = 0)
+  {
+    if (mPortaMode == 2) // Unison
+    {
+      if (noteOn)
+      {
+        if (mUnisonNote >= 0)
+          ReleaseUnisonVoices();
+        mUnisonNote = note;
+        TriggerUnisonVoices(note, velocity);
+      }
+      else
+      {
+        if (note == mUnisonNote)
+        {
+          ReleaseUnisonVoices();
+          mUnisonNote = -1;
+        }
+      }
+    }
+    else // Poly (modes 0 and 1)
+    {
+      IMidiMsg msg;
+      if (noteOn)
+        msg.MakeNoteOnMsg(note, velocity, offset);
+      else
+        msg.MakeNoteOffMsg(note, offset);
+      mSynth.AddMidiMsgToQueue(msg);
+    }
+  }
+
   void ProcessBlock(T** inputs, T** outputs, int nOutputs, int nFrames)
   {
     // 1. Clear outputs
@@ -158,16 +218,8 @@ public:
 
     // 5. Process arpeggiator — generates note events for this block
     mArp.Process(nFrames,
-      [this](int note, int offset) {
-        IMidiMsg msg;
-        msg.MakeNoteOnMsg(note, 127, offset);
-        mSynth.AddMidiMsgToQueue(msg);
-      },
-      [this](int note, int offset) {
-        IMidiMsg msg;
-        msg.MakeNoteOffMsg(note, offset);
-        mSynth.AddMidiMsgToQueue(msg);
-      });
+      [this](int note, int offset) { SendToSynth(note, true,  127, offset); },
+      [this](int note, int offset) { SendToSynth(note, false, 0,   offset); });
 
     // 6. Process voices through MidiSynth
     mSynth.ProcessBlock(mModulations.data(), outputs,
@@ -263,7 +315,7 @@ public:
       return;
     }
 
-    mSynth.AddMidiMsgToQueue(msg);
+    SendToSynth(msg.NoteNumber(), isNoteOn, msg.Velocity(), 0);
   }
 
   void SetParam(int paramIdx, double value)
@@ -279,7 +331,8 @@ public:
       kChorusOff, kChorusI, kChorusII,
       kOctTranspose, kArpMode, kArpRange, kLfoMode, kPwmMode,
       kVcfEnvInv, kVcaMode,
-      kBender, kTuning
+      kBender, kTuning, kPower,
+      kPortaMode, kPortaRate
     };
 
     switch (paramIdx)
@@ -410,6 +463,41 @@ public:
         break;
       }
 
+      // --- Portamento mode ---
+      case kPortaMode:
+      {
+        int prevMode = mPortaMode;
+        mPortaMode = static_cast<int>(value);
+
+        if (prevMode == 2 && mPortaMode != 2)
+        {
+          ReleaseUnisonVoices();
+          mUnisonNote = -1;
+        }
+        else if (prevMode != 2 && mPortaMode == 2)
+        {
+          for (int i = 0; i < 128; i++)
+          {
+            IMidiMsg msg; msg.MakeNoteOffMsg(i, 0);
+            mSynth.AddMidiMsgToQueue(msg);
+          }
+          mHeldNotes.reset();
+        }
+
+        bool portaOn = (mPortaMode >= 1);
+        SetVoiceParam([portaOn](kr106::Voice<T>& v) { v.mPortaEnabled = portaOn; });
+        break;
+      }
+      case kPortaRate:
+      {
+        float rate = static_cast<float>(value);
+        SetVoiceParam([rate](kr106::Voice<T>& v) {
+          v.mPortaRateParam = rate;
+          v.UpdatePortaCoeff();
+        });
+        break;
+      }
+
       // --- Arpeggiator ---
       case kArpRate:
         mArp.mRate = static_cast<float>(value);
@@ -502,6 +590,8 @@ public:
   int mKeyTranspose = 0;  // semitone offset from keyboard transpose mode
   bool mHold = false;
   bool mTranspose = false;
+  int mPortaMode = 0;     // 0=Poly, 1=Poly+Porta, 2=Unison
+  int mUnisonNote = -1;   // currently sounding unison note (-1 = none)
   bool mChorusI = false;
   bool mChorusII = false;
 
@@ -522,17 +612,28 @@ private:
 
   void ReleaseHeldNotes()
   {
-    for (int i = 0; i < 128; i++)
+    if (mPortaMode == 2) // Unison: just release if unison note was held
     {
-      if (mHeldNotes.test(i))
+      if (mUnisonNote >= 0 && mHeldNotes.test(mUnisonNote))
       {
-        if (mArp.mEnabled)
-          mArp.NoteOff(i);
-        else
+        ReleaseUnisonVoices();
+        mUnisonNote = -1;
+      }
+    }
+    else
+    {
+      for (int i = 0; i < 128; i++)
+      {
+        if (mHeldNotes.test(i))
         {
-          IMidiMsg msg;
-          msg.MakeNoteOffMsg(i, 0);
-          mSynth.AddMidiMsgToQueue(msg);
+          if (mArp.mEnabled)
+            mArp.NoteOff(i);
+          else
+          {
+            IMidiMsg msg;
+            msg.MakeNoteOffMsg(i, 0);
+            mSynth.AddMidiMsgToQueue(msg);
+          }
         }
       }
     }
@@ -554,8 +655,16 @@ public:
   // The note may or may not be in mHeldNotes (since OnMouseUp skips NoteOff when hold is on).
   void ForceRelease(int noteNum)
   {
-    mHeldNotes.reset(noteNum); // clear in case it was set
-    if (mArp.mEnabled)
+    mHeldNotes.reset(noteNum);
+    if (mPortaMode == 2) // Unison
+    {
+      if (noteNum == mUnisonNote)
+      {
+        ReleaseUnisonVoices();
+        mUnisonNote = -1;
+      }
+    }
+    else if (mArp.mEnabled)
       mArp.NoteOff(noteNum);
     else
     {

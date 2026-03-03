@@ -65,6 +65,8 @@ KR106::KR106(const InstanceInfo& info)
   GetParam(kBender)->InitDouble("Bender", 0., -1., 1., 0.01, "");
   GetParam(kTuning)->InitDouble("Tuning", 0., -1., 1., 0.01, "");
   GetParam(kPower)->InitBool("Power", true);
+  GetParam(kPortaMode)->InitInt("Porta Mode", 0, 0, 2); // 0=Poly, 1=Poly+Porta, 2=Unison
+  GetParam(kPortaRate)->InitDouble("Porta Rate", 0., 0., 1., 0.01, "");
 
 #include "KR106_Presets.h"
 
@@ -96,7 +98,11 @@ KR106::KR106(const InstanceInfo& info)
     pGraphics->AttachControl(new KR106PowerSwitchControl(IRECT(46, 40, 61, 59)));
 
     // Tuning knob — center 28x27 frame in original 39x39 widget at (34,64)
-    pGraphics->AttachControl(new KR106KnobControl(40, 70, smallKnobBitmap, kTuning));
+    pGraphics->AttachControl(new KR106KnobControl(40, 64, smallKnobBitmap, kTuning));
+
+    // Portamento mode switch and rate knob
+    pGraphics->AttachControl(new KR106KnobControl(85, 120, smallKnobBitmap, kPortaRate));
+    pGraphics->AttachControl(new KR106SwitchControl(94, 144, switch3wayBitmap, kPortaMode));
 
     // Bender sensitivity sliders (left side, below panel)
     pGraphics->AttachControl(new KR106SliderControl(IRECT(23, 127, 36, 176), kBenderDco));
@@ -108,8 +114,8 @@ KR106::KR106(const InstanceInfo& info)
     // Pitch bend lever (66, 206) — 60x8 spring-back horizontal
     pGraphics->AttachControl(new KR106BenderControl(IRECT(66, 206, 126, 214), kBender, benderGradient));
 
-    // Octave transpose 3-way switch (70, 142)
-    pGraphics->AttachControl(new KR106SwitchControl(70, 142, switch3wayBitmap, kOctTranspose));
+    // Octave transpose 3-way switch (65, 144)
+    pGraphics->AttachControl(new KR106SwitchControl(65, 144, switch3wayBitmap, kOctTranspose));
 
     // === ARPEGGIATOR SECTION ===
     // Transpose button+LED (95, 52), Hold (122, 52), Arp (154, 52)
@@ -313,7 +319,8 @@ int KR106::UnserializeState(const IByteChunk& chunk, int startPos)
   // Live performance controls — not part of a patch, preserve across preset changes
   static const int kLiveParams[] = {
     kTuning, kTranspose, kHold,
-    kArpeggio, kArpRate, kArpMode, kArpRange
+    kArpeggio, kArpRate, kArpMode, kArpRange,
+    kPortaMode, kPortaRate
   };
   constexpr int nLive = sizeof(kLiveParams) / sizeof(kLiveParams[0]);
 

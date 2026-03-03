@@ -58,6 +58,8 @@ enum EParams
   kBender,          // BD_BENDER
   kTuning,          // KN_TUNING
   kPower,
+  kPortaMode,       // SW_PORTA_MODE (0=Poly, 1=Poly+Porta, 2=Unison)
+  kPortaRate,       // KN_PORTA_RATE
 
   kNumParams
 };
