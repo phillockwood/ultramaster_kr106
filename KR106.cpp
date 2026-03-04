@@ -65,7 +65,7 @@ KR106::KR106(const InstanceInfo& info)
   GetParam(kBender)->InitDouble("Bender", 0., -1., 1., 0.01, "");
   GetParam(kTuning)->InitDouble("Tuning", 0., -1., 1., 0.01, "");
   GetParam(kPower)->InitBool("Power", true);
-  GetParam(kPortaMode)->InitInt("Porta Mode", 0, 0, 2); // 0=Poly, 1=Poly+Porta, 2=Unison
+  GetParam(kPortaMode)->InitInt("Porta Mode", 2, 0, 2); // default 2 = switch down = Poly
   GetParam(kPortaRate)->InitDouble("Porta Rate", 0., 0., 1., 0.01, "");
   GetParam(kTransposeOffset)->InitInt("Transpose Offset", 0, -24, 36);
 

@@ -134,13 +134,7 @@ public:
       v.Trigger(vel, anyBusy);
     });
 
-    // MidiSynth::ProcessBlock skips voice processing when mVoicesAreActive==false
-    // and the MIDI queue is empty. Push a no-op CC to keep the queue non-empty so
-    // voices we triggered directly are processed on the next audio block.
-    // (CC#0 with value 0 goes through kControllerAction → Voice::SetControl which is a no-op.)
-    IMidiMsg wakeup;
-    wakeup.MakeControlChangeMsg(IMidiMsg::EControlChangeMsg(0), 0, 0);
-    mSynth.AddMidiMsgToQueue(wakeup);
+    mSynth.SetVoicesActive(true);
   }
 
   void ReleaseUnisonVoices()
@@ -148,12 +142,56 @@ public:
     mSynth.ForEachVoice([](SynthVoice& sv) { sv.Release(); });
   }
 
+  // Lowest-first poly: prefer idle, then releasing, then steal oldest held
+  int FindLowestFreeVoice()
+  {
+    int nv = static_cast<int>(mSynth.NVoices());
+
+    // 1. Lowest idle voice (envelope finished)
+    for (int i = 0; i < nv; i++)
+      if (!mSynth.GetVoice(i)->GetBusy()) return i;
+
+    // 2. Lowest releasing voice (NoteOff sent, still in release tail)
+    for (int i = 0; i < nv; i++)
+      if (mVoiceNote[i] < 0) return i;
+
+    // 3. All voices actively held — steal the oldest
+    int oldest = 0;
+    int64_t oldestAge = mVoiceAge[0];
+    for (int i = 1; i < nv; i++)
+    {
+      if (mVoiceAge[i] < oldestAge)
+      {
+        oldestAge = mVoiceAge[i];
+        oldest = i;
+      }
+    }
+    return oldest;
+  }
+
+  void TriggerVoice(int voiceIdx, int note, int velocity)
+  {
+    auto& v = dynamic_cast<kr106::Voice<T>&>(*mSynth.GetVoice(voiceIdx));
+    double pitch = MidiToPitch(note);
+    v.SetUnisonPitch(pitch);
+    v.Trigger(velocity / 127.f, v.GetBusy());
+    mVoiceNote[voiceIdx] = note;
+    mVoiceAge[voiceIdx] = ++mVoiceAgeCounter;
+
+    mSynth.SetVoicesActive(true);
+  }
+
   void SendToSynth(int note, bool noteOn, int velocity, int offset = 0)
   {
-    if (mPortaMode == 2) // Unison
+    if (mPortaMode == 0) // Unison — last-note priority
     {
       if (noteOn)
       {
+        // Remove duplicate if already in stack, then push to top
+        auto it = std::find(mUnisonStack.begin(), mUnisonStack.end(), note);
+        if (it != mUnisonStack.end()) mUnisonStack.erase(it);
+        mUnisonStack.push_back(note);
+
         if (mUnisonNote >= 0)
           ReleaseUnisonVoices();
         mUnisonNote = note;
@@ -161,14 +199,51 @@ public:
       }
       else
       {
+        // Remove from stack
+        auto it = std::find(mUnisonStack.begin(), mUnisonStack.end(), note);
+        if (it != mUnisonStack.end()) mUnisonStack.erase(it);
+
         if (note == mUnisonNote)
         {
-          ReleaseUnisonVoices();
-          mUnisonNote = -1;
+          if (!mUnisonStack.empty())
+          {
+            // Return to previous held note
+            mUnisonNote = mUnisonStack.back();
+            TriggerUnisonVoices(mUnisonNote, 127);
+          }
+          else
+          {
+            ReleaseUnisonVoices();
+            mUnisonNote = -1;
+          }
         }
       }
     }
-    else // Poly (modes 0 and 1)
+    else if (mPortaMode == 1) // Poly + Porta — lowest-voice-first
+    {
+      if (noteOn)
+      {
+        int vi = FindLowestFreeVoice();
+        // If stealing, clear old mapping
+        if (mVoiceNote[vi] >= 0) mVoiceNote[vi] = -1;
+        TriggerVoice(vi, note, velocity);
+      }
+      else
+      {
+        // Find the voice playing this note and release it
+        int nv = static_cast<int>(mSynth.NVoices());
+        for (int i = 0; i < nv; i++)
+        {
+          if (mVoiceNote[i] == note)
+          {
+            mSynth.GetVoice(i)->Release();
+            mVoiceNote[i] = -1;
+            break;
+          }
+        }
+      }
+    }
+    else // Poly round-robin (mode 2) — stock MidiSynth allocator
     {
       IMidiMsg msg;
       if (noteOn)
@@ -474,24 +549,36 @@ public:
       case kPortaMode:
       {
         int prevMode = mPortaMode;
-        mPortaMode = static_cast<int>(value);
+        mPortaMode = static_cast<int>(value); // 0=Unison(up), 1=Porta(mid), 2=Poly(down)
 
-        if (prevMode == 2 && mPortaMode != 2)
+        // Release all voices when switching modes
+        if (prevMode == 0 && mPortaMode != 0)
         {
           ReleaseUnisonVoices();
           mUnisonNote = -1;
+          mUnisonStack.clear();
         }
-        else if (prevMode != 2 && mPortaMode == 2)
+        else if (prevMode == 1 && mPortaMode != 1)
         {
+          // Release lowest-first poly voices
+          int nv = static_cast<int>(mSynth.NVoices());
+          for (int i = 0; i < nv; i++)
+          {
+            if (mVoiceNote[i] >= 0) { mSynth.GetVoice(i)->Release(); mVoiceNote[i] = -1; }
+          }
+        }
+        else if (prevMode == 2 && mPortaMode != 2)
+        {
+          // Release round-robin poly voices
           for (int i = 0; i < 128; i++)
           {
             IMidiMsg msg; msg.MakeNoteOffMsg(i, 0);
             mSynth.AddMidiMsgToQueue(msg);
           }
-          mHeldNotes.reset();
         }
+        mHeldNotes.reset();
 
-        bool portaOn = (mPortaMode >= 1);
+        bool portaOn = (mPortaMode <= 1);
         SetVoiceParam([portaOn](kr106::Voice<T>& v) { v.mPortaEnabled = portaOn; });
         break;
       }
@@ -599,8 +686,12 @@ public:
   int mKeyTranspose = 0;  // semitone offset from keyboard transpose mode
   bool mHold = false;
   bool mTranspose = false;
-  int mPortaMode = 0;     // 0=Poly, 1=Poly+Porta, 2=Unison
+  int mPortaMode = 2;     // 0=Unison(up), 1=Poly+Porta(mid), 2=Poly(down)
   int mUnisonNote = -1;   // currently sounding unison note (-1 = none)
+  std::vector<int> mUnisonStack; // held notes for last-note priority (unison mode)
+  int mVoiceNote[6] = {-1,-1,-1,-1,-1,-1}; // note-to-voice map for lowest-first poly (mode 1)
+  int64_t mVoiceAge[6] = {0,0,0,0,0,0};   // assignment order counter for voice stealing
+  int64_t mVoiceAgeCounter = 0;
   bool mChorusI = false;
   bool mChorusII = false;
 
@@ -622,12 +713,30 @@ private:
 
   void ReleaseHeldNotes()
   {
-    if (mPortaMode == 2) // Unison: just release if unison note was held
+    if (mPortaMode == 0) // Unison: release all held notes from stack
     {
-      if (mUnisonNote >= 0 && mHeldNotes.test(mUnisonNote))
+      for (int i = 0; i < 128; i++)
+      {
+        if (mHeldNotes.test(i))
+        {
+          auto it = std::find(mUnisonStack.begin(), mUnisonStack.end(), i);
+          if (it != mUnisonStack.end()) mUnisonStack.erase(it);
+        }
+      }
+      if (mUnisonNote >= 0 && mUnisonStack.empty())
       {
         ReleaseUnisonVoices();
         mUnisonNote = -1;
+      }
+      else if (mUnisonNote >= 0 && !mHeldNotes.test(mUnisonNote))
+      {
+        // Current note wasn't held — keep playing it
+      }
+      else if (!mUnisonStack.empty())
+      {
+        // Current note was held, fall back to top of stack
+        mUnisonNote = mUnisonStack.back();
+        TriggerUnisonVoices(mUnisonNote, 127);
       }
     }
     else
@@ -666,13 +775,10 @@ public:
   void ForceRelease(int noteNum)
   {
     mHeldNotes.reset(noteNum);
-    if (mPortaMode == 2) // Unison
+    if (mPortaMode == 0) // Unison
     {
-      if (noteNum == mUnisonNote)
-      {
-        ReleaseUnisonVoices();
-        mUnisonNote = -1;
-      }
+      // Remove from stack and let SendToSynth handle last-note priority
+      SendToSynth(noteNum, false, 0);
     }
     else if (mArp.mEnabled)
       mArp.NoteOff(noteNum);
