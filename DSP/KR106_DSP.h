@@ -414,7 +414,8 @@ public:
       kOctTranspose, kArpMode, kArpRange, kLfoMode, kPwmMode,
       kVcfEnvInv, kVcaMode,
       kBender, kTuning, kPower,
-      kPortaMode, kPortaRate
+      kPortaMode, kPortaRate,
+      kTransposeOffset, kBenderLfo
     };
 
     switch (paramIdx)
@@ -452,6 +453,9 @@ public:
         break;
       case kBenderVcf:
         SetVoiceParam([value](kr106::Voice<T>& v) { v.mBendVcf = static_cast<float>(value); });
+        break;
+      case kBenderLfo:
+        SetVoiceParam([value](kr106::Voice<T>& v) { v.mBendLfo = static_cast<float>(value); });
         break;
 
       // --- ADSR ---

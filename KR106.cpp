@@ -68,6 +68,7 @@ KR106::KR106(const InstanceInfo& info)
   GetParam(kPortaMode)->InitInt("Porta Mode", 2, 0, 2); // default 2 = switch down = Poly
   GetParam(kPortaRate)->InitDouble("Porta Rate", 0., 0., 1., 0.01, "");
   GetParam(kTransposeOffset)->InitInt("Transpose Offset", 0, -24, 36);
+  GetParam(kBenderLfo)->InitDouble("Bender LFO", 0., 0., 1., 0.01, "");
 
 #include "KR106_Presets.h"
 
@@ -102,12 +103,13 @@ KR106::KR106(const InstanceInfo& info)
     pGraphics->AttachControl(new KR106KnobControl(40, 64, smallKnobBitmap, kTuning));
 
     // Portamento mode switch and rate knob
-    pGraphics->AttachControl(new KR106KnobControl(85, 120, smallKnobBitmap, kPortaRate));
-    pGraphics->AttachControl(new KR106SwitchControl(94, 144, switch3wayBitmap, kPortaMode));
+    pGraphics->AttachControl(new KR106KnobControl(87, 120, smallKnobBitmap, kPortaRate));
+    pGraphics->AttachControl(new KR106SwitchControl(96, 144, switch3wayBitmap, kPortaMode));
 
     // Bender sensitivity sliders (left side, below panel)
     pGraphics->AttachControl(new KR106SliderControl(IRECT(23, 127, 36, 176), kBenderDco));
     pGraphics->AttachControl(new KR106SliderControl(IRECT(41, 127, 54, 176), kBenderVcf));
+    pGraphics->AttachControl(new KR106SliderControl(IRECT(59, 127, 72, 176), kBenderLfo));
 
     // LFO Trigger button (75, 182) — 41x19 momentary
     pGraphics->AttachControl(new KR106LFOTrigControl(IRECT(75, 182, 116, 201)));
@@ -116,7 +118,7 @@ KR106::KR106(const InstanceInfo& info)
     pGraphics->AttachControl(new KR106BenderControl(IRECT(66, 206, 126, 214), kBender, benderGradient));
 
     // Octave transpose 3-way switch (65, 144)
-    pGraphics->AttachControl(new KR106SwitchControl(65, 144, switch3wayBitmap, kOctTranspose));
+    pGraphics->AttachControl(new KR106SwitchControl(74, 144, switch3wayBitmap, kOctTranspose));
 
     // === ARPEGGIATOR SECTION ===
     // Transpose button+LED (95, 52), Hold (122, 52), Arp (154, 52)
@@ -234,10 +236,22 @@ void KR106::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
       outputs[0][i] = outputs[1][i] = sample(0);
   }
 
-  // Feed scope: ch0 = audio (mono mix), ch1 = sync pulses
+  // Feed scope before output saturation so the display stays tall
   {
     sample* scopeBuf[2] = { outputs[0], mDSP.GetSyncBuffer() };
     mScopeSender.ProcessBlock(scopeBuf, nFrames, kCtrlTagScope);
+  }
+
+  // Output saturation: scale down 6-voice sum then soft-clip to keep peaks within ±1.0
+  for (int i = 0; i < nFrames; i++)
+  {
+    for (int c = 0; c < 2; c++)
+    {
+      double x = outputs[c][i] * 0.35; // ~-9 dB headroom for 6-voice sum
+      // tanh approximant: x*(27+x^2) / (27+9*x^2)
+      double x2 = x * x;
+      outputs[c][i] = x * (27.0 + x2) / (27.0 + 9.0 * x2);
+    }
   }
 }
 

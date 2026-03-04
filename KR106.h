@@ -61,6 +61,7 @@ enum EParams
   kPortaMode,       // SW_PORTA_MODE (0=Poly, 1=Poly+Porta, 2=Unison)
   kPortaRate,       // KN_PORTA_RATE
   kTransposeOffset, // semitone offset applied by keyboard transpose (-24..+36)
+  kBenderLfo,       // SL_BENDER_LFO
 
   kNumParams
 };
