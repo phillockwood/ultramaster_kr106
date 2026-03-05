@@ -171,6 +171,44 @@ public:
     return oldest;
   }
 
+  // Round-robin poly: rotate through voices for even distribution
+  int FindRoundRobinVoice()
+  {
+    int nv = static_cast<int>(mSynth.NVoices());
+
+    // 1. Next idle voice (envelope finished) from rotation point
+    for (int j = 0; j < nv; j++)
+    {
+      int i = (mRoundRobinNext + j) % nv;
+      if (!mSynth.GetVoice(i)->GetBusy())
+      {
+        mRoundRobinNext = (i + 1) % nv;
+        return i;
+      }
+    }
+
+    // 2. Next releasing voice (NoteOff sent, still in release tail)
+    for (int j = 0; j < nv; j++)
+    {
+      int i = (mRoundRobinNext + j) % nv;
+      if (mVoiceNote[i] < 0)
+      {
+        mRoundRobinNext = (i + 1) % nv;
+        return i;
+      }
+    }
+
+    // 3. All held — steal oldest
+    int oldest = 0;
+    int64_t oldestAge = mVoiceAge[0];
+    for (int i = 1; i < nv; i++)
+    {
+      if (mVoiceAge[i] < oldestAge) { oldestAge = mVoiceAge[i]; oldest = i; }
+    }
+    mRoundRobinNext = (oldest + 1) % nv;
+    return oldest;
+  }
+
   void TriggerVoice(int voiceIdx, int note, int velocity)
   {
     auto& v = dynamic_cast<kr106::Voice<T>&>(*mSynth.GetVoice(voiceIdx));
@@ -245,14 +283,27 @@ public:
         }
       }
     }
-    else // Poly round-robin (mode 2) — stock MidiSynth allocator
+    else // Poly round-robin (mode 2)
     {
-      IMidiMsg msg;
       if (noteOn)
-        msg.MakeNoteOnMsg(note, velocity, offset);
+      {
+        int vi = FindRoundRobinVoice();
+        if (mVoiceNote[vi] >= 0) mVoiceNote[vi] = -1;
+        TriggerVoice(vi, note, velocity);
+      }
       else
-        msg.MakeNoteOffMsg(note, offset);
-      mSynth.AddMidiMsgToQueue(msg);
+      {
+        int nv = static_cast<int>(mSynth.NVoices());
+        for (int i = 0; i < nv; i++)
+        {
+          if (mVoiceNote[i] == note)
+          {
+            mSynth.GetVoice(i)->Release();
+            mVoiceNote[i] = -1;
+            break;
+          }
+        }
+      }
     }
   }
 
@@ -505,7 +556,7 @@ public:
         SetVoiceParam([value](kr106::Voice<T>& v) { v.mDcoNoise = static_cast<float>(value); });
         break;
       case kVcfFreq: {
-        float hz = 20.f * std::pow(900.f, static_cast<float>(value));  // 20–18000 Hz exponential
+        float hz = 20.f * std::pow(1200.f, static_cast<float>(value));  // 20–24000 Hz exponential
         SetVoiceParam([hz](kr106::Voice<T>& v) { v.mVcfFreq = hz; });
         break;
       }
@@ -649,32 +700,45 @@ public:
           break;
         }
 
-        // Release all voices when switching modes
-        if (prevMode == 0 && mPortaMode != 0)
+        // Poly modes 1 and 2 share mVoiceNote[] — voices keep running
+        bool prevPoly = (prevMode >= 1);
+        bool newPoly  = (mPortaMode >= 1);
+
+        if (prevPoly && newPoly)
         {
-          ReleaseUnisonVoices();
-          mUnisonNote = -1;
-          mUnisonStack.clear();
+          // Poly ↔ Poly: nothing to do, voices and mVoiceNote[] stay valid
         }
-        else if (prevMode == 1 && mPortaMode != 1)
+        else
         {
-          // Release lowest-first poly voices
-          int nv = static_cast<int>(mSynth.NVoices());
-          for (int i = 0; i < nv; i++)
+          // Unison ↔ Poly: fundamentally different voice layout, must retrigger
+          std::bitset<128> activeNotes = mKeysDown | mHeldNotes;
+
+          if (prevMode == 0)
           {
-            if (mVoiceNote[i] >= 0) { mSynth.GetVoice(i)->Release(); mVoiceNote[i] = -1; }
+            ReleaseUnisonVoices();
+            mUnisonNote = -1;
+            mUnisonStack.clear();
           }
-        }
-        else if (prevMode == 2 && mPortaMode != 2)
-        {
-          // Release round-robin poly voices
+          else
+          {
+            int nv = static_cast<int>(mSynth.NVoices());
+            for (int i = 0; i < nv; i++)
+            {
+              if (mVoiceNote[i] >= 0) { mSynth.GetVoice(i)->Release(); mVoiceNote[i] = -1; }
+            }
+          }
+          mHeldNotes.reset();
+
           for (int i = 0; i < 128; i++)
           {
-            IMidiMsg msg; msg.MakeNoteOffMsg(i, 0);
-            mSynth.AddMidiMsgToQueue(msg);
+            if (activeNotes.test(i))
+            {
+              SendToSynth(i, true, 127);
+              if (!mKeysDown.test(i))
+                mHeldNotes.set(i);
+            }
           }
         }
-        mHeldNotes.reset();
 
         bool portaOn = (mPortaMode <= 1);
         SetVoiceParam([portaOn](kr106::Voice<T>& v) { v.mPortaEnabled = portaOn; });
@@ -787,9 +851,10 @@ public:
   int mPortaMode = 2;     // 0=Unison(up), 1=Poly+Porta(mid), 2=Poly(down)
   int mUnisonNote = -1;   // currently sounding unison note (-1 = none)
   std::vector<int> mUnisonStack; // held notes for last-note priority (unison mode)
-  int mVoiceNote[6] = {-1,-1,-1,-1,-1,-1}; // note-to-voice map for lowest-first poly (mode 1)
+  int mVoiceNote[6] = {-1,-1,-1,-1,-1,-1}; // note-to-voice map for poly modes (1 and 2)
   int64_t mVoiceAge[6] = {0,0,0,0,0,0};   // assignment order counter for voice stealing
   int64_t mVoiceAgeCounter = 0;
+  int mRoundRobinNext = 0;                 // round-robin rotation index for mode 2
   bool mChorusI = false;
   bool mChorusII = false;
 
@@ -846,11 +911,7 @@ private:
           if (mArp.mEnabled)
             mArp.NoteOff(i);
           else
-          {
-            IMidiMsg msg;
-            msg.MakeNoteOffMsg(i, 0);
-            mSynth.AddMidiMsgToQueue(msg);
-          }
+            SendToSynth(i, false, 0);
         }
       }
     }
@@ -873,19 +934,10 @@ public:
   void ForceRelease(int noteNum)
   {
     mHeldNotes.reset(noteNum);
-    if (mPortaMode == 0) // Unison
-    {
-      // Remove from stack and let SendToSynth handle last-note priority
-      SendToSynth(noteNum, false, 0);
-    }
-    else if (mArp.mEnabled)
+    if (mArp.mEnabled)
       mArp.NoteOff(noteNum);
     else
-    {
-      IMidiMsg msg;
-      msg.MakeNoteOffMsg(noteNum, 0);
-      mSynth.AddMidiMsgToQueue(msg);
-    }
+      SendToSynth(noteNum, false, 0);
   }
 
   template <typename F>

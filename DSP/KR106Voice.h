@@ -58,6 +58,12 @@ struct VCF
     float noiseLevel = 1e-3f / (1.f + stateEnergy * 1000.f);
     input += white * noiseLevel;
 
+    // Q compensation: models the BA662's non-inverting input path
+    // that boosts input drive proportionally with resonance, preventing
+    // the passband from thinning out. Partial compensation (~-5dB at
+    // max res vs ~-15dB without) matches the hardware character.
+    input *= 1.f + res * 2.f;
+
     // Feedback amount (k=0 no resonance, k≈4 self-oscillation)
     // In a 4-pole ladder the resonant gain is 1/4, so k=4 is the
     // threshold. k=4.5 at max res gives ~12% excess loop gain for
