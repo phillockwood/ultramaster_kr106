@@ -188,10 +188,91 @@ KR106::KR106(const InstanceInfo& info)
     // Bounds start at y=106 (5px above keys) to include the transpose chevron strip
     pGraphics->AttachControl(new KR106KeyboardControl(IRECT(129, 106, 921, 220), transposeChevronBitmap), kCtrlTagKeyboard);
 
-    // QWERTY keyboard handler
-    pGraphics->SetQwertyMidiKeyHandlerFunc([pGraphics](const IMidiMsg& msg) {
-      dynamic_cast<KR106KeyboardControl*>(pGraphics->GetControlWithTag(kCtrlTagKeyboard))
-        ->SetNoteFromMidi(msg.NoteNumber(), msg.StatusMsg() == IMidiMsg::kNoteOn);
+    // Keyboard handler: QWERTY = notes, Z/X = octave shift, unhandled keys pass to DAW
+    auto* kbd = dynamic_cast<KR106KeyboardControl*>(pGraphics->GetControlWithTag(kCtrlTagKeyboard));
+    pGraphics->SetKeyHandlerFunc([pGraphics, kbd](const IKeyPress& key, bool isUp) {
+      // Number keys 1-9 toggle panel buttons
+      {
+        static constexpr int kButtonMap[] = {
+          kTranspose, kHold, kArpeggio,
+          kDcoPulse, kDcoSaw, kDcoSubSw,
+          kChorusOff, kChorusI, kChorusII
+        };
+        int idx = key.VK - kVK_1;
+        if (idx >= 0 && idx < 9 && !isUp)
+        {
+          int paramIdx = kButtonMap[idx];
+          double cur = pGraphics->GetDelegate()->GetParam(paramIdx)->Value();
+          double next = (cur > 0.5) ? 0.0 : 1.0;
+          pGraphics->GetDelegate()->BeginInformHostOfParamChangeFromUI(paramIdx);
+          pGraphics->GetDelegate()->SendParameterValueFromUI(paramIdx, next);
+          pGraphics->GetDelegate()->EndInformHostOfParamChangeFromUI(paramIdx);
+          if (auto* c = pGraphics->GetControlWithParamIdx(paramIdx))
+          {
+            c->SetValueFromDelegate(next);
+            c->SetDirty(false);
+          }
+          return true;
+        }
+      }
+
+      // QWERTY-to-MIDI note mapping (same layout as iPlug2 default)
+      IMidiMsg msg;
+      int note = 0;
+      static int base = 48;
+      static bool keysDown[128] = {};
+
+      auto onOctSwitch = [&]() {
+        base = std::clamp(base, 24, 96);
+        for (int i = 0; i < 128; i++) {
+          if (keysDown[i]) {
+            msg.MakeNoteOffMsg(i, 0);
+            pGraphics->GetDelegate()->SendMidiMsgFromUI(msg);
+            kbd->SetNoteFromMidi(i, false);
+          }
+        }
+      };
+
+      switch (key.VK) {
+        case kVK_A: note = 0; break;
+        case kVK_W: note = 1; break;
+        case kVK_S: note = 2; break;
+        case kVK_E: note = 3; break;
+        case kVK_D: note = 4; break;
+        case kVK_F: note = 5; break;
+        case kVK_T: note = 6; break;
+        case kVK_G: note = 7; break;
+        case kVK_Y: note = 8; break;
+        case kVK_H: note = 9; break;
+        case kVK_U: note = 10; break;
+        case kVK_J: note = 11; break;
+        case kVK_K: note = 12; break;
+        case kVK_O: note = 13; break;
+        case kVK_L: note = 14; break;
+        case kVK_Z: if (!isUp) { base -= 12; onOctSwitch(); } return true;
+        case kVK_X: if (!isUp) { base += 12; onOctSwitch(); } return true;
+        default: return false; // pass unhandled keys to DAW (spacebar, arrows, etc.)
+      }
+
+      int pitch = base + note;
+      if (pitch < 0 || pitch > 127) return true;
+
+      if (!isUp) {
+        if (!keysDown[pitch]) {
+          msg.MakeNoteOnMsg(pitch, 127, 0);
+          keysDown[pitch] = true;
+          pGraphics->GetDelegate()->SendMidiMsgFromUI(msg);
+          kbd->SetNoteFromMidi(pitch, true);
+        }
+      } else {
+        if (keysDown[pitch]) {
+          msg.MakeNoteOffMsg(pitch, 0);
+          keysDown[pitch] = false;
+          pGraphics->GetDelegate()->SendMidiMsgFromUI(msg);
+          kbd->SetNoteFromMidi(pitch, false);
+        }
+      }
+      return true;
     });
   };
 #endif
@@ -314,6 +395,17 @@ void KR106::ProcessMidiMsg(const IMidiMsg& msg)
       for (int i = 0; i < kNumParams; i++)
         mDSP.SetParam(i, GetParam(i)->Value());
     }
+    return;
+  }
+
+  // Sustain pedal (CC64) toggles Hold
+  if (msg.StatusMsg() == IMidiMsg::kControlChange &&
+      msg.ControlChangeIdx() == IMidiMsg::kSustainOnOff)
+  {
+    bool pedalDown = msg.ControlChange(IMidiMsg::kSustainOnOff) >= 0.5;
+    GetParam(kHold)->Set(pedalDown ? 1.0 : 0.0);
+    OnParamChange(kHold);
+    SendParameterValueFromAPI(kHold, GetParam(kHold)->Value(), true);
     return;
   }
 
