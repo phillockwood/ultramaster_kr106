@@ -41,17 +41,17 @@ KR106Editor::KR106Editor(KR106AudioProcessor& p)
     // === LEFT SECTION: Master controls ===
     add(new KR106PowerSwitch(param(kPower)),              46,  40,  15, 19);
     add(new KR106Knob(param(kTuning), smallKnob, tip),    40,  64,  28, 27);
+    add(new KR106Knob(param(kMasterVol), smallKnob, tip),  55, 120,  28, 27);
     add(new KR106Knob(param(kPortaRate), smallKnob, tip),  87, 120,  28, 27);
     add(new KR106Switch(param(kPortaMode), switchV, 3),    96, 144,   9, 24);
 
     // Bender sensitivity sliders
-    add(new KR106Slider(param(kBenderDco), tip),  23, 127, 13, 49);
-    add(new KR106Slider(param(kBenderVcf), tip),  41, 127, 13, 49);
-    add(new KR106Slider(param(kBenderLfo), tip),  59, 127, 13, 49);
+    add(new KR106Slider(param(kBenderDco), tip),  23, 147, 13, 49);
+    add(new KR106Slider(param(kBenderVcf), tip),  41, 147, 13, 49);
+    add(new KR106Slider(param(kBenderLfo), tip),  59, 147, 13, 49);
 
-    // LFO trigger + pitch bend lever
-    add(new KR106LFOTrig(&p),                             75, 182,  41, 19);
-    add(new KR106Bender(param(kBender), benderGrad),       66, 206,  60,  8);
+    // Pitch bend lever with vertical LFO trigger
+    add(new KR106Bender(param(kBender), benderGrad, &p),   66, 202,  60, 12);
 
     // === ARPEGGIATOR SECTION ===
     add(new KR106ButtonLED(param(kTranspose), 1, ledRed, param(kPower)),  95, 43, 17, 28);

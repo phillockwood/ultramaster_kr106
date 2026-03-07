@@ -10,7 +10,7 @@ juce_add_plugin(KR106
     NEEDS_MIDI_OUTPUT TRUE
     PLUGIN_MANUFACTURER_CODE Krok
     PLUGIN_CODE Kr16
-    FORMATS AU VST3 LV2 Standalone
+    FORMATS VST3 Standalone $<$<PLATFORM_ID:Darwin>:AU> $<$<PLATFORM_ID:Linux>:LV2>
     PRODUCT_NAME "KR106"
     LV2URI "https://kayrock.org/kr106"
     COPY_PLUGIN_AFTER_BUILD TRUE

@@ -158,7 +158,7 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
       break;
 
     case kOctTranspose: {
-      mOctaveTranspose = 1 - static_cast<int>(value);
+      mOctaveTranspose = static_cast<int>(value) - 1;
       float semi = mOctaveTranspose * 12.f + static_cast<float>(mTuning) + mKeyTranspose;
       ForEachVoice([semi](kr106::Voice<T>& v) { v.mOctTranspose = semi; });
       break;

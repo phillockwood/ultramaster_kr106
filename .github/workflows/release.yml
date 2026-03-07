@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package
+        run: |
+          mkdir -p pkg
+          cp -R build/KR106_artefacts/Release/AU/KR106.component pkg/
+          cp -R build/KR106_artefacts/Release/VST3/KR106.vst3 pkg/
+          cp -R build/KR106_artefacts/Release/Standalone/KR106.app pkg/
+          cat > pkg/INSTALL.txt << 'EOF'
+          Ultramaster KR-106 — macOS Installation
+
+          AU:         Copy KR106.component to ~/Library/Audio/Plug-Ins/Components/
+          VST3:       Copy KR106.vst3 to ~/Library/Audio/Plug-Ins/VST3/
+          Standalone: Put KR106.app anywhere you like (e.g. /Applications)
+
+          After copying, restart your DAW to scan for new plugins.
+          EOF
+          cd pkg && zip -r ../KR106-macOS.zip .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KR106-macOS
+          path: KR106-macOS.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -B build
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p pkg
+          cp -R build/KR106_artefacts/Release/VST3/KR106.vst3 pkg/
+          cp -R build/KR106_artefacts/Release/Standalone/KR106.exe pkg/
+          cat > pkg/INSTALL.txt << 'EOF'
+          Ultramaster KR-106 — Windows Installation
+
+          VST3:       Copy the KR106.vst3 folder to C:\Program Files\Common Files\VST3\
+          Standalone: Put KR106.exe anywhere you like.
+
+          After copying, restart your DAW to scan for new plugins.
+          EOF
+          cd pkg && 7z a ../KR106-Windows.zip .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KR106-Windows
+          path: KR106-Windows.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libfreetype-dev \
+            libwebkit2gtk-4.1-dev \
+            mesa-common-dev libgl-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package
+        run: |
+          mkdir -p pkg
+          cp -R build/KR106_artefacts/Release/VST3/KR106.vst3 pkg/
+          cp -R build/KR106_artefacts/Release/LV2/KR106.lv2 pkg/
+          cp -R build/KR106_artefacts/Release/Standalone/KR106 pkg/
+          cat > pkg/INSTALL.txt << 'EOF'
+          Ultramaster KR-106 — Linux Installation
+
+          VST3:       Copy the KR106.vst3 folder to ~/.vst3/
+          LV2:        Copy the KR106.lv2 folder to ~/.lv2/
+          Standalone: Put KR106 anywhere on your PATH.
+
+          After copying, restart your DAW to scan for new plugins.
+          EOF
+          cd pkg && zip -r ../KR106-Linux.zip .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KR106-Linux
+          path: KR106-Linux.zip
+
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/KR106-macOS/KR106-macOS.zip
+            artifacts/KR106-Windows/KR106-Windows.zip
+            artifacts/KR106-Linux/KR106-Linux.zip
+          generate_release_notes: true

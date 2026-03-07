@@ -341,7 +341,13 @@ public:
 
   void ControlChange(int cc, float value)
   {
-    if (cc == 1) { mLFO.SetTrigger(value > 0.0f); return; }
+    if (cc == 1) {
+      bool on = value > 0.0f;
+      mLFO.SetTrigger(on);
+      float mod = on ? 1.f : 0.f;
+      ForEachVoice([mod](kr106::Voice<T>& v) { v.mBenderModAmt = mod; });
+      return;
+    }
   }
 
   // ADSR lookup tables

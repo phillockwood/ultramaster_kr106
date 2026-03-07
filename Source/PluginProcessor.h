@@ -20,6 +20,7 @@ enum EParams
   kPortaMode, kPortaRate,
   kTransposeOffset, kBenderLfo,
   kAdsrMode,
+  kMasterVol,
   kNumParams
 };
 

@@ -420,7 +420,8 @@ public:
   float mBendDco = 0.f;
   float mBendVcf = 0.f;
   float mBendLfo = 0.f;
-  float mRawBend = 0.f; // UI bender lever value [-1, +1]
+  float mRawBend = 0.f;      // UI bender lever horizontal [-1, +1]
+  float mBenderModAmt = 0.f; // UI bender lever vertical push [0, 1]
   float mOctTranspose = 0.f; // octave shift in semitones (±12)
   bool mSawOn = true;
   bool mPulseOn = true;
@@ -568,7 +569,7 @@ public:
       // Combined into single exp2: octave transpose + LFO + bender
       float pitchMod = mOctTranspose / 12.f
         + mPitchOffset
-        + 2.f * lfo * (mDcoLfo + fabsf(mRawBend) * mBendLfo) / 12.f
+        + 2.f * lfo * (mDcoLfo + mBenderModAmt * mBendLfo) / 12.f
         + mRawBend * mBendDco;
       float freq = baseFreq * powf(2.f, pitchMod);
       float cps = freq / mSampleRate;

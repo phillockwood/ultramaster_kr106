@@ -14,7 +14,7 @@ KR106AudioProcessor::KR106AudioProcessor()
     auto attrs = juce::AudioParameterFloatAttributes();
     if (fmt) attrs = attrs.withStringFromValueFunction(std::move(fmt));
     auto* p = new juce::AudioParameterFloat(
-      juce::ParameterID(juce::String(idx), 1), name,
+      juce::ParameterID("p" + juce::String(idx), 1), name,
       juce::NormalisableRange<float>(min, max, 0.01f), def, attrs);
     addParameter(p);
     mParams[idx] = p;
@@ -27,7 +27,7 @@ KR106AudioProcessor::KR106AudioProcessor()
     auto attrs = juce::AudioParameterIntAttributes();
     if (fmt) attrs = attrs.withStringFromValueFunction(std::move(fmt));
     auto* p = new juce::AudioParameterInt(
-      juce::ParameterID(juce::String(idx), 1), name, min, max, def, attrs);
+      juce::ParameterID("p" + juce::String(idx), 1), name, min, max, def, attrs);
     addParameter(p);
     mParams[idx] = p;
   };
@@ -35,7 +35,7 @@ KR106AudioProcessor::KR106AudioProcessor()
   // --- Toggle buttons ---
   auto addBool = [this](int idx, const char* name, bool def) {
     auto* p = new juce::AudioParameterBool(
-      juce::ParameterID(juce::String(idx), 1), name, def);
+      juce::ParameterID("p" + juce::String(idx), 1), name, def);
     addParameter(p);
     mParams[idx] = p;
   };
@@ -96,7 +96,7 @@ KR106AudioProcessor::KR106AudioProcessor()
     auto attrs = juce::AudioParameterFloatAttributes()
                    .withStringFromValueFunction(fmtArpBpm);
     auto* p = new juce::AudioParameterFloat(
-      juce::ParameterID(juce::String(kArpRate), 1), "Arp Rate",
+      juce::ParameterID("p" + juce::String(kArpRate), 1), "Arp Rate",
       juce::NormalisableRange<float>(15.f, 1800.f, 0.1f, 0.3f), 120.f, attrs);
     addParameter(p);
     mParams[kArpRate] = p;
@@ -166,6 +166,15 @@ KR106AudioProcessor::KR106AudioProcessor()
   addSwitch(kPortaMode,    "Porta Mode",  2, 0, 2);
   addSlider(kPortaRate,    "Porta Rate",  0.f, 0.f, 1.f, fmtPorta);
   addSwitch(kTransposeOffset, "Transpose Offset", 0, -24, 36);
+
+  // Master volume knob (applied after scope, before output)
+  SFV fmtMasterVol = [](float v, int) {
+    if (v <= 0.f) return juce::String("-inf dB");
+    double dB = 20.0 * std::log10((double)v);
+    if (dB >= 0.0) return "+" + juce::String(dB, 1) + " dB";
+    return juce::String(dB, 1) + " dB";
+  };
+  addSlider(kMasterVol, "Master Volume", 0.2f, 0.f, 1.f, fmtMasterVol);
 }
 
 void KR106AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
@@ -316,6 +325,14 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     mScopeWritePos.store(wp, std::memory_order_release);
   }
 
+  // --- Master volume (after scope, before output) ---
+  float masterVol = getParamValue(kMasterVol);
+  for (int i = 0; i < nFrames; i++)
+  {
+    outputs[0][i] *= masterVol;
+    if (nOutputs > 1) outputs[1][i] *= masterVol;
+  }
+
   // --- Mute if power off ---
   if (!mPowerOn)
   {
@@ -350,6 +367,10 @@ void KR106AudioProcessor::parameterChanged(int paramIdx, float newValue)
   else if (paramIdx == kTransposeOffset)
   {
     mDSP.SetKeyTranspose(static_cast<int>(newValue));
+  }
+  else if (paramIdx == kMasterVol)
+  {
+    // handled in processBlock, not dispatched to DSP
   }
   else
   {
@@ -409,7 +430,8 @@ static bool isLivePerformanceParam(int idx)
 {
   return idx == kTuning || idx == kTranspose || idx == kHold ||
          idx == kArpeggio || idx == kArpRate || idx == kArpMode || idx == kArpRange ||
-         idx == kPortaMode || idx == kPortaRate || idx == kTransposeOffset;
+         idx == kPortaMode || idx == kPortaRate || idx == kTransposeOffset ||
+         idx == kMasterVol;
 }
 
 int KR106AudioProcessor::getNumPrograms()  { return kNumPresets; }
