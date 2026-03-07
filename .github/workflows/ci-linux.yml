@@ -36,6 +36,6 @@ jobs:
         with:
           name: KR106-linux
           path: |
-            build/KR106_artefacts/Release/VST3/
-            build/KR106_artefacts/Release/LV2/
-            build/KR106_artefacts/Release/Standalone/
+            build/KR106_artefacts/**/VST3/
+            build/KR106_artefacts/**/LV2/
+            build/KR106_artefacts/**/Standalone/

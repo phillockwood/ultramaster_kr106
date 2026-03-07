@@ -21,9 +21,11 @@ jobs:
       - name: Package
         run: |
           mkdir -p pkg
-          cp -R build/KR106_artefacts/Release/AU/KR106.component pkg/
-          cp -R build/KR106_artefacts/Release/VST3/KR106.vst3 pkg/
-          cp -R build/KR106_artefacts/Release/Standalone/KR106.app pkg/
+          ARTS=build/KR106_artefacts
+          if [ -d "$ARTS/Release" ]; then ARTS="$ARTS/Release"; fi
+          cp -R "$ARTS/AU/KR106.component" pkg/
+          cp -R "$ARTS/VST3/KR106.vst3" pkg/
+          cp -R "$ARTS/Standalone/KR106.app" pkg/
           cat > pkg/INSTALL.txt << 'EOF'
           Ultramaster KR-106 — macOS Installation
 
@@ -57,8 +59,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p pkg
-          cp -R build/KR106_artefacts/Release/VST3/KR106.vst3 pkg/
-          cp -R build/KR106_artefacts/Release/Standalone/KR106.exe pkg/
+          ARTS=build/KR106_artefacts
+          if [ -d "$ARTS/Release" ]; then ARTS="$ARTS/Release"; fi
+          cp -R "$ARTS/VST3/KR106.vst3" pkg/
+          cp -R "$ARTS/Standalone/KR106.exe" pkg/
           cat > pkg/INSTALL.txt << 'EOF'
           Ultramaster KR-106 — Windows Installation
 
@@ -100,9 +104,12 @@ jobs:
       - name: Package
         run: |
           mkdir -p pkg
-          cp -R build/KR106_artefacts/Release/VST3/KR106.vst3 pkg/
-          cp -R build/KR106_artefacts/Release/LV2/KR106.lv2 pkg/
-          cp -R build/KR106_artefacts/Release/Standalone/KR106 pkg/
+          ARTS=build/KR106_artefacts
+          # Single-config generators (Makefiles) omit the Release/ subdirectory
+          if [ -d "$ARTS/Release" ]; then ARTS="$ARTS/Release"; fi
+          cp -R "$ARTS/VST3/KR106.vst3" pkg/
+          cp -R "$ARTS/LV2/KR106.lv2" pkg/
+          cp -R "$ARTS/Standalone/KR106" pkg/
           cat > pkg/INSTALL.txt << 'EOF'
           Ultramaster KR-106 — Linux Installation
 
