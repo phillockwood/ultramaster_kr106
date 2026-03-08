@@ -164,18 +164,7 @@ struct BBDLine
     // 4. Advance write position
     mWPos = (mWPos + 1) & mMask;
 
-    // 5. BBD charge-well saturation: models cumulative charge
-    //    transfer nonlinearity across 256 MN3009 stages.
-    //    Linear below ±0.7 (zero attenuation at normal levels),
-    //    gently compresses peaks above that threshold.
-    if (fabsf(wet) > 0.7f)
-    {
-      float sign = (wet > 0.f) ? 1.f : -1.f;
-      float d = fabsf(wet) - 0.7f;
-      wet = sign * (0.7f + d / (1.f + 2.f * d));
-    }
-
-    // 6. BBD-bandwidth modulated lowpass (1-pole TPT)
+    // 5. BBD-bandwidth modulated lowpass (1-pole TPT)
     //    cutoff = BBD Nyquist = kNumStages / (4 * delay_seconds)
     //    Single pole (~-6dB/oct) matches the gentle BBD rolloff;
     //    combined with pre/post 15kHz filters gives ~-18dB/oct total.
@@ -220,6 +209,16 @@ struct Chorus
   static constexpr float kDryMix = 0.4f;
   static constexpr float kWetMix = 0.6f;
   static constexpr float kMakeupGain = 1.2f; // compensate comb filter energy loss
+  static constexpr float kFadeMs = 5.f;      // crossfade duration for mode switching
+
+  // Smoothed depths (avoids clicks on mode-to-mode transitions)
+  float mDepth0 = 0.f, mDepth1 = 0.f;
+  float mTargetDepth0 = 0.f, mTargetDepth1 = 0.f;
+
+  // Crossfade (0 = dry, 1 = chorus)
+  float mFade = 0.f;
+  float mFadeTarget = 0.f;
+  float mFadeInc = 0.f; // per-sample increment
 
   void Init(float sampleRate)
   {
@@ -229,9 +228,17 @@ struct Chorus
     mLFO0.Reset();
     mLFO1.Reset();
 
-    // Configure LFOs for current mode
+    mFadeInc = 1.f / (kFadeMs * 0.001f * sampleRate);
+
+    // Configure for current mode
     if (mMode > 0)
+    {
       ConfigureLFOs();
+      UpdateDepthTargets();
+      mDepth0 = mTargetDepth0;
+      mDepth1 = mTargetDepth1;
+      mFade = mFadeTarget = 1.f;
+    }
   }
 
   void Clear()
@@ -249,13 +256,12 @@ struct Chorus
     int oldMode = mMode;
     mMode = newMode;
 
-    // Going to OFF: just stop processing (Process returns dry when
-    // mode==0). Don't clear delay lines — during preset changes the
-    // chorus params transition through an intermediate OFF state
-    // (kChorusI processed before kChorusII), and clearing here would
-    // wipe the BBD buffers causing a level discontinuity.
     if (mMode == 0)
+    {
+      // Fade out — keep processing until fade completes
+      mFadeTarget = 0.f;
       return;
+    }
 
     // Coming from off: clear delay lines for clean start
     if (oldMode == 0)
@@ -267,37 +273,34 @@ struct Chorus
     }
 
     ConfigureLFOs();
+    UpdateDepthTargets();
+    mFadeTarget = 1.f;
   }
 
   void Process(float input, float& outL, float& outR)
   {
-    if (mMode == 0)
+    // Advance crossfade
+    if (mFade < mFadeTarget)
+      mFade = std::min(mFade + mFadeInc, mFadeTarget);
+    else if (mFade > mFadeTarget)
+      mFade = std::max(mFade - mFadeInc, mFadeTarget);
+
+    // Fully dry — skip chorus processing
+    if (mFade <= 0.f)
     {
       outL = outR = input;
       return;
     }
 
-    float depth0, depth1;
-    switch (mMode)
-    {
-      case 1: // Chorus I
-        depth0 = depth1 = kChorusIDepth;
-        break;
-      case 2: // Chorus II
-        depth0 = depth1 = kChorusIIDepth;
-        break;
-      case 3: // I+II
-      default:
-        depth0 = kChorusIDepth;
-        depth1 = kChorusIIDepth;
-        break;
-    }
+    // Smooth depth toward target (~5ms)
+    mDepth0 += (mTargetDepth0 - mDepth0) * mFadeInc;
+    mDepth1 += (mTargetDepth1 - mDepth1) * mFadeInc;
 
     float lfo0 = mLFO0.Process();
     float lfo1 = mLFO1.Process();
 
-    float delay0ms = kCenterDelayMs + depth0 * lfo0;
-    float delay1ms = kCenterDelayMs + depth1 * lfo1;
+    float delay0ms = kCenterDelayMs + mDepth0 * lfo0;
+    float delay1ms = kCenterDelayMs + mDepth1 * lfo1;
 
     float delay0samp = delay0ms * 0.001f * mSampleRate;
     float delay1samp = delay1ms * 0.001f * mSampleRate;
@@ -305,11 +308,29 @@ struct Chorus
     float wet0 = mLine0.Process(input, delay0samp);
     float wet1 = mLine1.Process(input, delay1samp);
 
-    outL = kMakeupGain * (kDryMix * input + kWetMix * wet0);
-    outR = kMakeupGain * (kDryMix * input + kWetMix * wet1);
+    float chorusL = kMakeupGain * (kDryMix * input + kWetMix * wet0);
+    float chorusR = kMakeupGain * (kDryMix * input + kWetMix * wet1);
+
+    // Op-amp output stage saturation
+    chorusL = tanhf(chorusL);
+    chorusR = tanhf(chorusR);
+
+    // Crossfade between dry and chorus
+    outL = input + mFade * (chorusL - input);
+    outR = input + mFade * (chorusR - input);
   }
 
 private:
+  void UpdateDepthTargets()
+  {
+    switch (mMode)
+    {
+      case 1: mTargetDepth0 = mTargetDepth1 = kChorusIDepth; break;
+      case 2: mTargetDepth0 = mTargetDepth1 = kChorusIIDepth; break;
+      case 3: mTargetDepth0 = kChorusIDepth; mTargetDepth1 = kChorusIIDepth; break;
+    }
+  }
+
   void ConfigureLFOs()
   {
     switch (mMode)
