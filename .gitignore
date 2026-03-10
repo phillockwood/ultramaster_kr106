@@ -37,5 +37,8 @@ ipch/
 *.layout
 .vscode/
 
+# Audio samples
+*.wav
+
 # iPlug2
 gui/

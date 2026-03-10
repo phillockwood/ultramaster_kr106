@@ -1,0 +1,107 @@
+Juno-106 Test Recording Guide
+
+Setup: Record via headphone or main output into any audio interface, 24-bit / 44.1kHz or higher. WAV only, no MP3. Stereo or mono, MIDI or manual, whatever is easier. Tests 1-4 at 96kHz if your interface supports it, everything else 44.1 is fine.
+
+INIT PATCH — reset to this before each test:
+LFO Rate: 0, Delay: 0 | DCO: all oscillators OFF, Range 8', LFO 0, PWM Manual at 0
+HPF: 1 | VCF: Freq 10, Res 0, Env 0, LFO 0, Key OFF | VCA: Gate, Level 10
+ENV: A 0, D 0, S 10, R 0 | Chorus OFF
+
+Only change what's listed for each test.
+
+1. Saw, filter open ( 01_saw.wav )
+   Saw ON, all else OFF. VCF Freq 10, Res 0, Env 0. VCA Gate.
+   Play and hold C2, C4, C7 — 3 sec each.
+
+2. Square, filter open ( 02_square.wav )
+   Square ON, Saw OFF. PWM Manual 0 (center). Everything else same as #1.
+   Play and hold C2, C4, C7 — 3 sec each.
+
+3. Sub oscillator, filter open ( 03_sub.wav )
+   Sub ON, Saw OFF. Everything else same as #1.
+   Play and hold C2, C4 — 3 sec each.
+
+4. All oscillators combined ( 04_mixer.wav )
+   Saw ON + Square ON + Sub ON. PWM Manual 0. Everything else same as #1.
+   Hold C4 for 3 sec.
+
+5. ADSR — decay ( 05_env_decay.wav )
+   Saw ON. VCF Freq 10, Res 0, Env 0. VCA Env, Level 10.
+   A 0, S 0, R 0. Vary D from 0 to 10 (every position).
+   For each D value: strike C4 once, wait for silence, then next.
+
+6. ADSR — attack ( 06_env_attack.wav )
+   Saw ON. VCF Freq 10, Res 0, Env 0. VCA Env, Level 10.
+   D 5, S 10, R 0. Vary A from 0 to 10.
+   For each A value: hold C4 for 3 sec, release, wait 1 sec.
+
+7. ADSR — release ( 07_env_release.wav )
+   Saw ON. VCF Freq 10, Res 0, Env 0. VCA Env, Level 10.
+   A 0, D 0, S 10. Vary R from 0 to 10.
+   For each R value: hold C4 for 1 sec, release, wait for silence.
+
+8. Filter cutoff sweep, no resonance ( 08_filter_sweep_res0.wav )
+   Noise ON, all oscillators OFF. VCF Res 0, Env 0. VCA Gate, Level 10.
+   Hold a key continuously. Slide VCF Freq slowly from 0 to 10 (~10 sec).
+
+9. Filter cutoff sweep, high resonance ( 09_filter_sweep_res10.wav )
+   Same as #8 but VCF Res 10.
+
+10. Filter envelope ( 10_filter_env.wav )
+    Noise ON, oscillators OFF. VCF Freq 0, Res 0, Env 10. VCA Env, Level 10.
+    A 0, S 0, R 0. Vary D = 0, 2, 4, 6, 8, 10.
+    Strike C4, wait for silence, then next.
+
+11. Filter envelope + resonance ( 11_filter_env_res7.wav )
+    Same as #10 but VCF Res 7.
+
+12. Noise floor ( 12_noise_floor.wav )
+    All oscillators OFF, Noise OFF. VCA Gate, Level 10. Chorus OFF.
+    Hold a key for 5 sec.
+
+13. Chorus I ( 13_chorus_I.wav )
+    Same patch as #1 (Saw, filter open) but Chorus I.
+    Hold C4 for 5 sec.
+
+14. Chorus II ( 14_chorus_II.wav )
+    Same but Chorus II. Hold C4 for 5 sec.
+
+15. Chorus I+II ( 15_chorus_I_II.wav )
+    Same but Chorus I+II. Hold C4 for 5 sec.
+
+16. Square PWM positions ( 16_pwm_positions.wav )
+    Same as #2 but try PWM Manual at 0, 3, 5, 7, 10.
+    Hold C4 for 3 sec at each position.
+
+17. Square PWM via LFO ( 17_pwm_lfo.wav )
+    Same as #2 but PWM set to LFO, LFO Rate 5.
+    Hold C4 for 5 sec.
+
+18. Filter self-oscillation ( 18_filter_self_osc.wav )
+    All oscillators OFF, Noise OFF. VCF Res 10, Env 0. VCA Gate, Level 10.
+    Hold a key, slowly slide Freq from 0 to 10 (~10 sec).
+
+19. Filter keyboard tracking ( 19_filter_kb_track.wav )
+    Saw ON. VCF Freq 5, Res 6, Env 0. VCA Gate. Chorus OFF.
+    Play C2, C3, C4, C5, C6 — hold 2 sec each.
+
+20. Chorus on noise ( 20_chorus_noise.wav )
+    Noise ON, oscillators OFF. VCF Freq 10, Res 0, Env 0. VCA Gate, Level 10.
+    Chorus I — hold a key for 5 sec. Repeat with II, then I+II.
+
+21. Factory presets ( 21_preset_XXX.wav )
+    If you still have the original factory presets, these 8 cover a good
+    spread of ADSR settings. For each one, just hold middle C for about
+    3 sec (longer for the ones with release tails). Name them like
+    21_preset_A37.wav, 21_preset_A17.wav, etc.
+
+    A37 Pizzicato        (A0 D1 S1 R1)
+    A17 Choir             (A7 D2 S1 R1)
+    B12 Violin            (A6 D0 S4 R5)
+    B81 Low Dark Strings  (A9 D1 S2 R3)
+    B56 Ethereal          (A9 D3 S5 R0)
+    A34 Brass III         (A6 D8 S10 R0)
+    A85 Rocket Men        (A0 D8 S9 R10)
+    A81 Gong              (A2 D3 S4 R8)
+
+Multiple takes welcome. Thanks!

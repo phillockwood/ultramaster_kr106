@@ -29,7 +29,7 @@ public:
 
         // Fill entire white-key area first to avoid sub-pixel gaps on Windows
         g.setColour(kKB_Light);
-        g.fillRect(ox, oy, 792.f, 109.f);
+        g.fillRect(ox, oy, 792.f, 108.f);
 
         for (int oct = 0; oct < 5; oct++)
         {
