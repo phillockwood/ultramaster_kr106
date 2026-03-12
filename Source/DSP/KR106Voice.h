@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cstdint>
 
+#include "KR106ADSR.h"
 #include "KR106Oscillators.h"
 
 // Complete KR-106 voice: oscillators -> VCF -> ADSR -> VCA
@@ -265,133 +266,6 @@ private:
 };
 
 // ============================================================
-// ADSR Envelope — models the IR3R01 OTA envelope generator
-// ============================================================
-// Key behaviors matching the hardware:
-// - Attack overshoot: linear ramp doesn't clamp at 1.0, so faster
-//   attacks overshoot more (~2-3% at 1ms), giving percussive "bite"
-// - Decay rate independent of sustain: fixed exponential toward 0,
-//   stopped when it crosses the sustain level. The decay knob sets
-//   the time constant, sustain only sets where it stops.
-// - Separate decay/release multipliers (no shared mM state)
-struct ADSR
-{
-  enum State { kAttack, kDecay, kSustain, kRelease, kFinished };
-  static constexpr float kGateSlope = 1.f / 32.f;
-  static constexpr float kMinLevel     = 0.001f;  // -60dB: calibrates decay/release time constants
-  static constexpr float kSilence      = 1e-5f;   // -100dB: release termination threshold
-  static constexpr float kAttackTarget = 1.5f;     // RC charge target (above comparator threshold of 1.0)
-
-  State mState = kFinished;
-  float mEnv = 0.f;
-  float mGateEnv = 0.f;
-  float mAttackRate = 0.f;   // linear per-sample increment (Juno-106 mode)
-  float mAttackCoeff = 0.f;  // one-pole RC coefficient (Juno-6 mode)
-  bool  mExponentialAttack = false; // true = Juno-6 RC charging attack
-  float mDecayRate = 0.f;    // linear rate (for sustain tracking)
-  float mDecayMul = 1.f;     // fixed exponential multiplier (toward 0)
-  float mSustain = 1.f;
-  float mReleaseMul = 1.f;   // fixed exponential multiplier (toward 0)
-  float mSampleRate = 44100.f;
-  float mTimeScale = 1.f;    // per-voice component tolerance (scales ms times)
-
-  void SetSampleRate(float sr) { mSampleRate = sr; }
-
-  void SetAttack(float ms)
-  {
-    mAttackRate = 1000.f / (ms * mTimeScale * mSampleRate);
-  }
-
-  // Juno-6 exponential attack: RC charge toward kAttackTarget (1.5),
-  // reaching 1.0 in exactly ms milliseconds
-  void SetAttackExp(float ms)
-  {
-    float T = ms * mTimeScale * mSampleRate / 1000.f;
-    mAttackCoeff = 1.f - expf(-logf(3.f) / T);
-  }
-
-  void SetDecay(float ms)
-  {
-    // Fixed-rate exponential decay toward 0. Reaches -60dB in ms.
-    // Rate is independent of sustain level.
-    mDecayRate = 1000.f / (ms * mTimeScale * mSampleRate);
-    mDecayMul = expf(logf(kMinLevel) * mDecayRate);
-  }
-
-  void SetSustain(float s) { mSustain = s; }
-
-  void SetRelease(float ms)
-  {
-    float releaseRate = 1000.f / (ms * mTimeScale * mSampleRate);
-    mReleaseMul = expf(logf(kMinLevel) * releaseRate);
-  }
-
-  void NoteOn() { mState = kAttack; }
-  void NoteOff() { mState = kRelease; }
-
-  bool GetBusy() const { return mState != kFinished || mGateEnv > 0.f; }
-
-  float Process()
-  {
-    switch (mState)
-    {
-      case kAttack:
-        if (mExponentialAttack)
-          mEnv += (kAttackTarget - mEnv) * mAttackCoeff; // Juno-6: RC charge curve
-        else
-          mEnv += mAttackRate; // Juno-106: linear ramp (overshoot ~2-3% at 1ms)
-        mGateEnv += kGateSlope;
-        if (mEnv >= 1.f)
-          mState = kDecay;
-        break;
-
-      case kDecay:
-        mEnv *= mDecayMul;
-        mGateEnv += kGateSlope;
-        if (mEnv <= mSustain)
-        {
-          mEnv = mSustain;
-          mState = kSustain;
-        }
-        break;
-
-      case kSustain:
-        // Smoothly track sustain level changes
-        if (mEnv < mSustain)
-        {
-          // Sustain raised: ramp up at 3x decay rate
-          mEnv += 3.f * mDecayRate;
-          if (mEnv > mSustain) mEnv = mSustain;
-        }
-        else if (mEnv > mSustain)
-        {
-          // Sustain lowered: decay at normal rate
-          mEnv *= mDecayMul;
-          if (mEnv < mSustain) mEnv = mSustain;
-        }
-        break;
-
-      case kRelease:
-        mGateEnv -= kGateSlope;
-        mEnv *= mReleaseMul;
-        if (mEnv < kSilence)
-        {
-          mEnv = 0.f;
-          mState = kFinished;
-        }
-        break;
-
-      case kFinished:
-        mGateEnv -= kGateSlope;
-        break;
-    }
-
-    mGateEnv = std::clamp(mGateEnv, 0.f, 1.f);
-    return mEnv;
-  }
-};
-
-// ============================================================
 // KR106Voice — complete per-voice signal chain
 // ============================================================
 template <typename T>
@@ -591,24 +465,46 @@ public:
         if (mSyncOut) mSyncOut[i] = T(1);
       }
 
-      // --- VCF frequency calculation (sample-rate independent) ---
-      float vcfFrq = logf(mVcfFreq) + mVcfFreqOffset;                        // base cutoff (Hz) + tolerance
-      vcfFrq += logf(baseFreq / 32.703f) * mVcfKbd;                       // keyboard tracking (key CV only, not LFO-modulated pitch)
-      vcfFrq += mLogNyq * env * mVcfEnv * 0.73f * mVcfEnvInvert;          // envelope
-      vcfFrq += mLogNyq * lfo * mVcfLfo * 0.2f;                           // LFO
-      vcfFrq += 4.15888f * mRawBend * mBendVcf;                           // bender (6 oct range)
+      // --- VCF frequency calculation ---
+      // All modulation sources sum in log-frequency space (voltage summing into
+      // the IR3109's exponential converter). Gains derived from circuit analysis
+      // of the summing amplifier (IC9, R107=100K feedback) and ENV gain stage
+      // (IC8, ½ M5218L). Absolute scale anchored to ENV measurement (0.516).
+      //
+      // Circuit gains at summing amp (relative to FREQ=1.0):
+      //   FREQ:  R100 (100K)  → 1.00
+      //   KYBD:  R108 (49.9K) → 2.00
+      //   ENV:   IC8 × R101   → 1.47 (normal), 1.65 (inverted)
+      //   LFO:   R106 (220K)  → 0.455
+      //   Bend:  R93  (220K)  → 0.455
+
+      static constexpr float kEnvScale    = 0.516f; // measured: ~5 oct at ENV=8
+      static constexpr float kEnvInvScale = 0.578f; // 1.121× normal (circuit ratio)
+      static constexpr float kLfoScale    = 0.159f; // 0.309× ENV (R106/R101 ratio)
+      static constexpr float kBendScale   = 0.159f; // same as LFO (R93 = R106 = 220K)
+      static constexpr float kKbdMax      = 2.0f;   // R108 (49.9K) → 2× tracking at max
+
+      float envScale = (mVcfEnvInvert > 0) ? kEnvScale : kEnvInvScale;
+
+      float vcfFrq = logf(mVcfFreq) + mVcfFreqOffset;
+      vcfFrq += logf(baseFreq / 32.703f) * mVcfKbd * kKbdMax;
+      vcfFrq += mLogNyq * env * mVcfEnv * envScale * float(mVcfEnvInvert);
+      vcfFrq += mLogNyq * lfo * mVcfLfo * kLfoScale;
+      vcfFrq += 4.15888f * mRawBend * mBendVcf;  // bender (6 oct range, tuned separately)
 
       float vcfCPS = expf(vcfFrq) * mInvNyq;
       vcfCPS = std::clamp(vcfCPS, mMinCPS, 0.82f);
 
       float filtered = mVCF.Process(oscOut, vcfCPS, mVcfRes);
 
+      float signal = filtered;
+
       // --- VCA ---
       float vcaOut;
       if (mVcaMode)
-        vcaOut = filtered * mADSR.mGateEnv * velocity * mVcaGainScale; // Gate mode
+        vcaOut = signal * mADSR.mGateEnv * velocity * mVcaGainScale; // Gate mode
       else
-        vcaOut = filtered * env * velocity * mVcaGainScale;              // ADSR mode
+        vcaOut = signal * env * velocity * mVcaGainScale;              // ADSR mode
 
       // Accumulate mono (chorus does stereo later)
       outputs[0][i] += static_cast<T>(vcaOut);

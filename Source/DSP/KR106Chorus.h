@@ -300,12 +300,14 @@ struct Chorus
     delay0samp = std::max(delay0samp, 1.f);
     delay1samp = std::max(delay1samp, 1.f);
 
-    float wet0 = mLine0.Process(input, delay0samp) * kBBDGain;
-    float wet1 = mLine1.Process(input, delay1samp) * kBBDGain;
+    float wet0 = mLine0.Process(input, delay0samp);
+    float wet1 = mLine1.Process(input, delay1samp);
 
-    // Crossfade between dry bypass and chorus
-    outL = input + mFade * (wet0 - input);
-    outR = input + mFade * (wet1 - input);
+    // Crossfade wet/dry and BBD gain together so both reach unity
+    // at mFade=0, matching the bypass path with no level discontinuity.
+    float gain = 1.f + mFade * (kBBDGain - 1.f);
+    outL = (input + mFade * (wet0 - input)) * gain;
+    outR = (input + mFade * (wet1 - input)) * gain;
   }
 
 private:

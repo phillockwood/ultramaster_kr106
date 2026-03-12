@@ -22,7 +22,7 @@ juce_add_plugin(KR106
     PLUGIN_MANUFACTURER_CODE Krok
     PLUGIN_CODE Kr16
     FORMATS ${KR106_FORMATS}
-    PRODUCT_NAME "KR-106"
+    PRODUCT_NAME "Ultramaster KR-106"
     PLUGIN_NAME "Ultramaster KR-106"
     LV2URI "https://kayrock.org/kr106"
     COPY_PLUGIN_AFTER_BUILD TRUE

@@ -36,7 +36,8 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
       ForEachVoice([value](kr106::Voice<T>& v) { v.mDcoNoise = static_cast<float>(value); });
       break;
     case kVcfFreq: {
-      float hz = 20.f * std::pow(900.f, static_cast<float>(value));
+      float s = static_cast<float>(value);
+      float hz = std::exp(3.9367f + 3.5178f * s + 2.4454f * s * s);
       ForEachVoice([hz](kr106::Voice<T>& v) { v.mVcfFreq = hz; });
       break;
     }
@@ -64,18 +65,25 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
 
     case kEnvA: {
       mSliderA = static_cast<float>(value);
-      bool j6 = (mAdsrMode == 0);
-      float ms = LookupLUT(j6 ? kAttackLUT_J6 : kAttackLUT, mSliderA);
-      if (j6)
-        ForEachVoice([ms](kr106::Voice<T>& v) { v.mADSR.SetAttackExp(ms); });
-      else
+      if (mAdsrMode == 0) {
+        // Juno-6: exponential tau mapping from measured hardware
+        float tau = 0.001f * std::pow(3000.f, mSliderA); // 1ms–3s
+        ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetAttackTau(tau); });
+      } else {
+        float ms = LookupLUT(kAttackLUT, mSliderA);
         ForEachVoice([ms](kr106::Voice<T>& v) { v.mADSR.SetAttack(ms); });
+      }
       break;
     }
     case kEnvD: {
       mSliderD = static_cast<float>(value);
-      float ms = LookupLUT(mAdsrMode == 0 ? kDecayLUT_J6 : kDecayLUT, mSliderD);
-      ForEachVoice([ms](kr106::Voice<T>& v) { v.mADSR.SetDecay(ms); });
+      if (mAdsrMode == 0) {
+        float tau = 0.004f * std::pow(1000.f, mSliderD); // 4ms–4s (3τ ≈ 12s)
+        ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetDecayTau(tau); });
+      } else {
+        float ms = LookupLUT(kDecayLUT, mSliderD);
+        ForEachVoice([ms](kr106::Voice<T>& v) { v.mADSR.SetDecay(ms); });
+      }
       break;
     }
     case kEnvS: {
@@ -85,8 +93,13 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
     }
     case kEnvR: {
       mSliderR = static_cast<float>(value);
-      float ms = LookupLUT(mAdsrMode == 0 ? kReleaseLUT_J6 : kReleaseLUT, mSliderR);
-      ForEachVoice([ms](kr106::Voice<T>& v) { v.mADSR.SetRelease(ms); });
+      if (mAdsrMode == 0) {
+        float tau = 0.004f * std::pow(1000.f, mSliderR); // 4ms–4s (3τ ≈ 12s)
+        ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetReleaseTau(tau); });
+      } else {
+        float ms = LookupLUT(kReleaseLUT, mSliderR);
+        ForEachVoice([ms](kr106::Voice<T>& v) { v.mADSR.SetRelease(ms); });
+      }
       break;
     }
 
@@ -114,8 +127,8 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
       break;
     case kAdsrMode: {
       mAdsrMode = static_cast<int>(value);
-      bool expAtk = (mAdsrMode == 0);
-      ForEachVoice([expAtk](kr106::Voice<T>& v) { v.mADSR.mExponentialAttack = expAtk; });
+      bool j6 = (mAdsrMode == 0);
+      ForEachVoice([j6](kr106::Voice<T>& v) { v.mADSR.mJ6Mode = j6; });
       SetParam(kEnvA, mSliderA);
       SetParam(kEnvD, mSliderD);
       SetParam(kEnvR, mSliderR);
