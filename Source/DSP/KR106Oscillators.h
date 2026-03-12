@@ -61,17 +61,14 @@ struct Oscillators {
   // suppression that doesn't match the hardware measurements.
   static constexpr float kSawCurve = 0.03f;
 
-  // Capacitor discharge blip: when the reset transistor fires, parasitic
-  // inductance causes the capacitor to briefly undershoot below ground.
-  // kBlipAmp may be higher than real hardware (~0.03-0.05); pending
-  // DC-coupled measurement for precise calibration.
-  static constexpr float kBlipAmp = 0.1f;
-  static constexpr float kBlipDecay = 0.5f; // half-life ≈ 1 sample
-
-  // Sub oscillator passive RC lowpass (~4.2kHz at 44.1k).
-  // The CD4013 flip-flop output passes through coupling caps and the
-  // mixer resistor network before reaching the VCF, rounding its edges.
-  static constexpr float kSubLPCoeff = 0.45f;
+  // Saw reset blip: when TR5 discharges C7, the circuit rings at ~20 kHz
+  // (LC parasitic resonance) with Q ≈ 10, decaying in ~280 µs.
+  // Measured at 384 kHz: initial spike 11.6% of ramp, total deviation 19.2%.
+  // At 44.1 kHz the ring is unresolvable (2.2 samples/cycle), so we model
+  // it as an energy-equivalent PolyBLEP impulse. 0.15 splits the difference
+  // between spike-only and total ring energy.
+  static constexpr float kBlipAmp = 0.15f;
+  static constexpr float kBlipDecay = 0.5f;
 
   void Reset() {
     mPos = 0.f;
@@ -126,14 +123,12 @@ struct Oscillators {
       pw2 += 1.f;
     pulse += PolyBLEP(pw2, cps);    // rising edge at PW crossing
 
-    // --- Sub: flip-flop + polyBLEP + passive LP ---
-    // CD4013 divider produces a square wave one octave below the saw.
+    // --- Sub: CD4013 flip-flop + polyBLEP ---
+    // Half-frequency square wave, phase-locked to saw reset.
+    // Measured harmonics match ideal 1/n — no audible filtering in-band.
     float sub = mSubState ? 1.f : -1.f;
     if (sync)
       sub += PolyBLEP(mPos, cps) * (mSubState ? 1.f : -1.f);
-    // RC lowpass rounding the CD4013 square wave edges
-    mSubLPState += kSubLPCoeff * (sub - mSubLPState);
-    sub = mSubLPState;
 
     // --- Oscillator mixing ---
     // Pop-free crossfade when waveform switches change mid-note.
