@@ -1,0 +1,8 @@
+slider,sustain,decay_tau_ms,decay_90_10_ms,decay_fit,decay_power,release_tau_ms,release_90_10_ms,release_fit,release_power
+0,0.9654,1.42,3.33,exp_power,1.186,2.04,3.33,exp_power,1.426
+1,0.5943,6.86,14.67,exp_power,1.155,8.52,17.33,exp_power,1.106
+2,0.5205,30.19,,exp_power,0.982,22.24,43.33,exp_power,1.107
+3,0.2548,661.09,1194.67,exp_power,0.616,166.13,327.33,exp_power,1.106
+4,0.4899,433.68,852.67,exp_power,0.961,222.17,446.00,exp_power,1.091
+5,0.0972,1338.11,1920.67,exp_power,1.196,352.31,652.67,exp_power,1.160
+6,0.0799,4101.90,7014.67,exp_power,0.848,866.43,2456.00,exp_power,0.741

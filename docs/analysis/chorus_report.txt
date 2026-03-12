@@ -1,0 +1,35 @@
+Juno Chorus Analysis Report
+==================================================
+
+Source: juno6/chrous.wav
+Sample rate: 44100Hz
+Stereo: True
+Sections: 3
+
+--- Dry ---
+  RMS: -21.3 dBFS
+
+--- Chorus I ---
+  RMS: -19.1 dBFS
+  LFO rate: 6.20 Hz
+  Centroid modulation range L: 553 Hz
+  Centroid modulation range R: 470 Hz
+  L/R correlation: 0.808
+  Stereo width (S/M): -6.9 dB
+  Correlation range: 0.79 to 0.83
+
+--- Chorus II ---
+  RMS: -19.1 dBFS
+  LFO rate: 6.22 Hz
+  Centroid modulation range L: 601 Hz
+  Centroid modulation range R: 562 Hz
+  L/R correlation: 0.812
+  Stereo width (S/M): -6.9 dB
+  Correlation range: 0.77 to 0.85
+
+
+Summary
+------------------------------------------------------------
+Mode              LFO Hz    Delay L    Delay R   L/R Corr    Width
+Chorus I            6.20          —          —      0.808   -6.9dB
+Chorus II           6.22          —          —      0.812   -6.9dB

@@ -1,0 +1,29 @@
+[
+  {
+    "file": "08_filter_sweep_res0.wav",
+    "sr": 96000,
+    "type": "filter",
+    "cutoff_min_hz": 46.875,
+    "cutoff_max_hz": 6937.5,
+    "mean_resonance_db": 9.527124485729253,
+    "mean_slope_db_oct": -7.5409534039019706
+  },
+  {
+    "file": "09_filter_sweep_res10.wav",
+    "sr": 96000,
+    "type": "filter",
+    "cutoff_min_hz": 46.875,
+    "cutoff_max_hz": 21468.75,
+    "mean_resonance_db": 17.889468609455573,
+    "mean_slope_db_oct": -20.812824582615534
+  },
+  {
+    "file": "09_filter_sweep_res5.wav",
+    "sr": 96000,
+    "type": "filter",
+    "cutoff_min_hz": 46.875,
+    "cutoff_max_hz": 9984.375,
+    "mean_resonance_db": 10.511382616941036,
+    "mean_slope_db_oct": -17.102693055842906
+  }
+]

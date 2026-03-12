@@ -1,0 +1,19 @@
+Decay + Release Analysis Report
+============================================================
+
+Source: ./juno6/decay_sustain5_release.wav
+Sample rate: 96000Hz
+Notes analyzed: 7
+
+  Slider  Sustain        D τ    D 90-10      D fit        R τ    R 90-10      R fit   D≈R?
+  ------  -------       ----    -------      -----       ----    -------      -----   ----
+       0     0.97          1          3  exp_power          2          3  exp_power   0.7x
+       1     0.59          7         15  exp_power          9         17  exp_power    YES
+       2     0.52         30          —  exp_power         22         43  exp_power   1.4x
+       3     0.25        661       1195  exp_power        166        327  exp_power   4.0x
+       4     0.49        434        853  exp_power        222        446  exp_power   2.0x
+       5     0.10       1338       1921  exp_power        352        653  exp_power   3.8x
+       6     0.08       4102       7015  exp_power        866       2456  exp_power   4.7x
+
+Decay power exponents: 1.19, 1.15, 0.98, 0.62, 0.96, 1.20, 0.85 (mean: 0.99)
+Release power exponents: 1.43, 1.11, 1.11, 1.11, 1.09, 1.16, 0.74 (mean: 1.11)

@@ -1,0 +1,28 @@
+Decay/Release Envelope Analysis Report
+==================================================
+
+Source: juno6/release.wav
+Sample rate: 96000Hz
+Notes analyzed: 9
+
+  Slider     90-10%      95-5%          τ      -20dB      -40dB          Fit
+  ------     ------      -----        ---      -----      -----          ---
+       0     96.0ms    144.0ms     68.9ms      124ms      190ms    exp_power
+       1    145.3ms    186.7ms     65.8ms      153ms      253ms      exp_off
+       2    976.0ms   1200.7ms    436.0ms      994ms     1599ms      exp_off
+       3    826.7ms   1068.7ms    366.9ms      861ms     1427ms    exp_power
+       4   1385.3ms   1794.7ms    576.2ms     1406ms     2393ms    exp_power
+       5   2886.0ms   3716.7ms   1283.8ms     2907ms     4976ms      exp_off
+       6   4741.3ms   6047.3ms   2173.4ms     4800ms     8066ms      exp_off
+       7   7764.7ms  10010.0ms   3464.0ms     7846ms    13457ms      exp_off
+       8  10524.7ms  13480.0ms   4659.8ms    10545ms    18046ms      exp_off
+
+
+Curve Shape Summary
+------------------------------
+  exp_off: 6/9 notes
+  exp_power: 3/9 notes
+
+  Decay power exponents: 1.67, 1.01, 0.91, 0.98, 0.91, 0.90, 0.93, 0.89, 0.88
+  Mean power: 1.01
+  (1.0 = pure exponential, <1 = fast initial/slow tail, >1 = slow initial/fast tail)

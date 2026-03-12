@@ -1,0 +1,21 @@
+Juno-106 Recording Analysis Report
+==================================================
+
+--- 08_filter_sweep_res0.wav (filter) ---
+  Sample rate: 96000 Hz
+  Cutoff range: 47–6938 Hz
+  Mean resonance: 9.5 dB
+  Mean rolloff: -7.5 dB/oct
+
+--- 09_filter_sweep_res10.wav (filter) ---
+  Sample rate: 96000 Hz
+  Cutoff range: 47–21469 Hz
+  Mean resonance: 17.9 dB
+  Mean rolloff: -20.8 dB/oct
+
+--- 09_filter_sweep_res5.wav (filter) ---
+  Sample rate: 96000 Hz
+  Cutoff range: 47–9984 Hz
+  Mean resonance: 10.5 dB
+  Mean rolloff: -17.1 dB/oct
+

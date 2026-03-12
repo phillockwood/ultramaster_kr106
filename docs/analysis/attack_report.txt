@@ -1,0 +1,24 @@
+Attack Envelope Analysis Report
+==================================================
+
+Source: juno6/attack2.wav
+Sample rate: 96000Hz
+Notes analyzed: 6
+
+  Slider     10-90%      5-95%          τ          Fit    Sustain
+  ------     ------      -----        ---          ---    -------
+       0    138.7ms    155.3ms    265.4ms     rc_power     0.2642
+       1    284.0ms    321.3ms    522.1ms     rc_power     0.2682
+       2    836.7ms    943.3ms   1624.6ms     rc_power     0.2680
+       3    718.7ms    810.7ms   1265.0ms     rc_power     0.2692
+       4   1434.0ms   1625.3ms   2643.3ms     rc_power     0.2696
+       5   1887.3ms   2140.7ms   3272.4ms     rc_power     0.2697
+
+
+Curve Shape Summary
+------------------------------
+  rc_power: 6/6 notes
+
+  RC power exponents: 0.96, 0.99, 1.00, 1.00, 0.99, 1.00
+  Mean power: 0.99
+  (1.0 = standard RC, <1 = concave, >1 = convex/S-curve)
