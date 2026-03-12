@@ -66,8 +66,8 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
     case kEnvA: {
       mSliderA = static_cast<float>(value);
       if (mAdsrMode == 0) {
-        // Juno-6: exponential tau mapping from measured hardware
-        float tau = 0.001f * std::pow(3000.f, mSliderA); // 1ms–3s
+        // Juno-6: exponential tau mapping. Completion = tau*ln(6) → 1.8ms–3s
+        float tau = 0.001f * std::pow(1674.f, mSliderA);
         ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetAttackTau(tau); });
       } else {
         float ms = LookupLUT(kAttackLUT, mSliderA);

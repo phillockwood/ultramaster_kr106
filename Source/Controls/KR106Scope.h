@@ -234,7 +234,7 @@ private:
         if (j6)
         {
             // Juno-6: tau in seconds (must match KR106_DSP_SetParam.h)
-            float attackTau  = 0.001f * std::pow(3000.f, dsp.mSliderA);
+            float attackTau  = 0.001f * std::pow(1674.f, dsp.mSliderA);
             float decayTau   = 0.004f * std::pow(1000.f, dsp.mSliderD);
             float releaseTau = 0.004f * std::pow(1000.f, dsp.mSliderR);
 
@@ -270,9 +270,14 @@ private:
         int yDivider = hTop;
         int yBotStart = hTop + 1;
 
-        // Horizontal divider line
+        // Horizontal divider line with 1-second tick marks
         g.setColour(dim);
         g.fillRect(0.f, static_cast<float>(yDivider), static_cast<float>(w), 1.f);
+        for (int sec = 1; sec < static_cast<int>(kWindowMs / 1000.f); sec++)
+        {
+            float tx = std::round(sec * 1000.f / kWindowMs * (w - 1));
+            g.fillRect(tx, static_cast<float>(yDivider - 2), 1.f, 5.f);
+        }
 
         // Phase boundaries as pixel positions within 15s window
         float xAD = std::round(std::min(attackMs / kWindowMs, 1.f) * (w - 1));
