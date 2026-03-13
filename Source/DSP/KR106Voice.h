@@ -233,9 +233,9 @@ public:
       //   LFO:  ±3 octaves at max slider (6 octaves total swing)
       //   KBD:  0–100% keyboard tracking (1.0 = 1V/oct)
       //   Bend: 6 octaves range (tuned independently from LFO)
-      static constexpr float kEnvScale    = 0.693f;  // 10 * ln(2) / ln(22050)
-      static constexpr float kEnvInvScale = 0.777f;  // 10 * 1.121 * ln(2) / ln(22050)
-      static constexpr float kLfoScale    = 0.208f;  // 3 * ln(2) / ln(22050)
+      static constexpr float kEnvScale    = 6.931f;  // 10 * ln(2): 10 octaves
+      static constexpr float kEnvInvScale = 7.766f;  // 10 * 1.121 * ln(2): inverted path gain asymmetry
+      static constexpr float kLfoScale    = 2.079f;  // 3 * ln(2): ±3 octaves
 
       float envScale = (mVcfEnvInvert > 0) ? kEnvScale : kEnvInvScale;
 

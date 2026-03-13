@@ -66,23 +66,35 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
     case kEnvA: {
       mSliderA = static_cast<float>(value);
       if (mAdsrMode == 0) {
-        // Juno-6: exponential tau mapping. Completion = tau*ln(6) → 1.8ms–3s
-        float tau = 0.001f * std::pow(1674.f, mSliderA);
+        // Measured from 1982 Juno-6 (completion times in seconds):
+        //   A=2: .018  A=3: .094  A=4: .126  A=5: .224
+        //   A=6: .586  A=7: .979  A=8: 1.066  A=9: 2.34
+        // Quadratic-exponential fit excluding dead spots at A=4, A=8.
+        // FIXME(kr106): re-measure with pot voltage readings for better accuracy.
+        float s = mSliderA;
+        float tau = 0.001500f * std::exp(11.7382f * s + -4.7207f * s * s);
         ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetAttackTau(tau); });
       } else {
-        float ms = LookupLUT(kAttackLUT, mSliderA);
-        ForEachVoice([ms](kr106::Voice<T>& v) { v.mADSR.SetAttack(ms); });
+        float s = mSliderA;
+        ForEachVoice([s](kr106::Voice<T>& v) { v.mADSR.Set106Attack(s); });
       }
       break;
     }
     case kEnvD: {
       mSliderD = static_cast<float>(value);
       if (mAdsrMode == 0) {
-        float tau = 0.004f * std::pow(1000.f, mSliderD); // 4ms–4s (3τ ≈ 12s)
+        // Measured from 1982 Juno-6, VCF sweep durations (seconds):
+        //   D=2: .086  D=3: .262  D=4: .821  D=5: 2.610  D=6: 2.325
+        //   D=7: 5.609  D=8: 8.774  D=9: 20.051  D=10: 22.093
+        // Re-measured D=4b: .876  D=5b: 1.587  D=6b: 2.564
+        // Quadratic-exponential fit excluding dead spots at D=4, D=8.
+        // FIXME(kr106): re-measure with pot voltage readings for better accuracy.
+        float s = mSliderD;
+        float tau = 0.003577f * std::exp(12.9460f * s + -5.0638f * s * s);
         ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetDecayTau(tau); });
       } else {
-        float ms = LookupLUT(kDecayLUT, mSliderD);
-        ForEachVoice([ms](kr106::Voice<T>& v) { v.mADSR.SetDecay(ms); });
+        int idx = static_cast<int>(mSliderD * 127.f + 0.5f);
+        ForEachVoice([idx](kr106::Voice<T>& v) { v.mADSR.Set106Decay(idx); });
       }
       break;
     }
@@ -94,11 +106,14 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
     case kEnvR: {
       mSliderR = static_cast<float>(value);
       if (mAdsrMode == 0) {
-        float tau = 0.004f * std::pow(1000.f, mSliderR); // 4ms–4s (3τ ≈ 12s)
+        // Same circuit as decay (shared R/C network on IR3R01).
+        // FIXME(kr106): re-measure with pot voltage readings for better accuracy.
+        float s = mSliderR;
+        float tau = 0.003577f * std::exp(12.9460f * s + -5.0638f * s * s);
         ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetReleaseTau(tau); });
       } else {
-        float ms = LookupLUT(kReleaseLUT, mSliderR);
-        ForEachVoice([ms](kr106::Voice<T>& v) { v.mADSR.SetRelease(ms); });
+        int idx = static_cast<int>(mSliderR * 127.f + 0.5f);
+        ForEachVoice([idx](kr106::Voice<T>& v) { v.mADSR.Set106Release(idx); });
       }
       break;
     }

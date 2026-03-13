@@ -40,5 +40,8 @@ ipch/
 # Audio samples
 *.wav
 
+# ROM analysis (copyrighted data)
+resources/106rom/
+
 # iPlug2
 gui/

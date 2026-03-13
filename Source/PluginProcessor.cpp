@@ -76,18 +76,18 @@ KR106AudioProcessor::KR106AudioProcessor()
     if (t >= 1000.0) return juce::String(t / 1000.0, 2) + " s";
     return juce::String(juce::roundToInt(t)) + " ms";
   };
-  // Juno-6 slider→tau formulas (must match KR106_DSP_SetParam.h)
-  // Attack: show completion time = tau*ln(6) (1.8ms–3s). Decay/release: 3*tau (≈95% completion).
-  auto j6AttackMs = [](float s) { return 0.001f * std::pow(1674.f, s) * 1791.8f; };
-  auto j6DecayMs  = [](float s) { return 0.004f * std::pow(1000.f, s) * 3000.f; };
-
-  auto fmtMs = [this](const float* lut106, std::function<float(float)> j6Fn) -> SFV {
-    return [this, lut106, j6Fn](float v, int) {
-      bool j6 = mParams[kAdsrMode] && mParams[kAdsrMode]->getValue() < 0.5f;
-      float ms = j6 ? j6Fn(v) : KR106DSP<float>::LookupLUT(lut106, v);
-      if (ms >= 1000.f) return juce::String(ms / 1000.f, 2) + " s";
-      return juce::String(juce::roundToInt(ms)) + " ms";
-    };
+  using ADSR = kr106::ADSR;
+  auto fmtAtkMs = [this](float v, int) -> juce::String {
+    bool j6 = mParams[kAdsrMode] && mParams[kAdsrMode]->getValue() < 0.5f;
+    float ms = j6 ? 0.001500f * std::exp(11.7382f * v + -4.7207f * v * v) * 1791.8f : ADSR::AttackMs(v);
+    if (ms >= 1000.f) return juce::String(ms / 1000.f, 2) + " s";
+    return juce::String(juce::roundToInt(ms)) + " ms";
+  };
+  auto fmtDRMs = [this](float v, int) -> juce::String {
+    bool j6 = mParams[kAdsrMode] && mParams[kAdsrMode]->getValue() < 0.5f;
+    float ms = j6 ? 0.003577f * std::exp(12.9460f * v + -5.0638f * v * v) * 3000.f : ADSR::DecRelMs(v);
+    if (ms >= 1000.f) return juce::String(ms / 1000.f, 2) + " s";
+    return juce::String(juce::roundToInt(ms)) + " ms";
   };
 
   // Bender sensitivity sliders
@@ -134,13 +134,10 @@ KR106AudioProcessor::KR106AudioProcessor()
   addSlider(kVcaLevel,   "Volume",      0.5f, 0.f, 1.f, fmtVcaLevel);
 
   // ADSR (raw 0-1 slider values; DSP applies curve + range via LUT)
-  addSlider(kEnvA,       "Attack",      0.25f, 0.f, 1.f,
-            fmtMs(KR106DSP<float>::kAttackLUT, j6AttackMs));
-  addSlider(kEnvD,       "Decay",       0.25f, 0.f, 1.f,
-            fmtMs(KR106DSP<float>::kDecayLUT, j6DecayMs));
+  addSlider(kEnvA,       "Attack",      0.25f, 0.f, 1.f, fmtAtkMs);
+  addSlider(kEnvD,       "Decay",       0.25f, 0.f, 1.f, fmtDRMs);
   addSlider(kEnvS,       "Sustain",     0.9f,  0.f, 1.f, fmtPct);
-  addSlider(kEnvR,       "Release",     0.25f, 0.f, 1.f,
-            fmtMs(KR106DSP<float>::kReleaseLUT, j6DecayMs));
+  addSlider(kEnvR,       "Release",     0.25f, 0.f, 1.f, fmtDRMs);
 
   // Toggle buttons
   addBool(kTranspose,    "Transpose",   false);

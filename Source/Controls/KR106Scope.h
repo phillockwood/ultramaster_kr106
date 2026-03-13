@@ -4,6 +4,7 @@
 #include "PluginProcessor.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 // ============================================================================
 // KR106Scope -- oscilloscope display (green waveform on black)
@@ -220,23 +221,21 @@ private:
 
         // Constants matching KR106ADSR.h
         static constexpr float kAttackTarget    = 1.2f;
-        static constexpr float kDecayUndershoot = -0.1f;
         static constexpr float kReleaseTarget   = -0.1f;
-        static constexpr float kMinLevel        = 0.001f;
-        static constexpr float kWindowMsJ6  = 15000.f;
-        static constexpr float kWindowMs106 = 27500.f;
+        static constexpr float kWindowMs        = 6000.f;
+
+        using ADSR = kr106::ADSR;
 
         // Compute times and coefficients per mode
-        float attackMs, decayMs, releaseMs;
+        float attackMs;
         float attackCoeff = 0.f, decayCoeff = 0.f, releaseCoeff = 0.f;
-        float decayMul = 0.f, releaseMul = 0.f;
 
         if (j6)
         {
             // Juno-6: tau in seconds (must match KR106_DSP_SetParam.h)
-            float attackTau  = 0.001f * std::pow(1674.f, dsp.mSliderA);
-            float decayTau   = 0.004f * std::pow(1000.f, dsp.mSliderD);
-            float releaseTau = 0.004f * std::pow(1000.f, dsp.mSliderR);
+            float attackTau  = 0.001500f * std::exp(11.7382f * dsp.mSliderA + -4.7207f * dsp.mSliderA * dsp.mSliderA);
+            float decayTau   = 0.003577f * std::exp(12.9460f * dsp.mSliderD + -5.0638f * dsp.mSliderD * dsp.mSliderD);
+            float releaseTau = 0.003577f * std::exp(12.9460f * dsp.mSliderR + -5.0638f * dsp.mSliderR * dsp.mSliderR);
 
             // Per-ms coefficients (matching ADSR per-sample coeff but at 1kHz)
             attackCoeff  = 1.f - expf(-0.001f / attackTau);
@@ -244,25 +243,13 @@ private:
             releaseCoeff = 1.f - expf(-0.001f / releaseTau);
 
             // Approximate completion times for phase boundaries
-            // Attack: solve kAttackTarget*(1-(1-c)^n) = 1.0
             attackMs = -logf(1.f - 1.f / kAttackTarget) / -logf(1.f - attackCoeff);
-            // Decay/release: 3*tau ≈ 95% completion (matches tooltip)
-            decayMs   = decayTau * 3000.f;
-            releaseMs = releaseTau * 3000.f;
         }
         else
         {
-            // Juno-106: ms from LUT
-            attackMs  = DSP::LookupLUT(DSP::kAttackLUT,  dsp.mSliderA);
-            decayMs   = DSP::LookupLUT(DSP::kDecayLUT,   dsp.mSliderD);
-            releaseMs = DSP::LookupLUT(DSP::kReleaseLUT, dsp.mSliderR);
-
-            // Per-ms multipliers
-            decayMul   = (decayMs > 0.f)   ? expf(logf(kMinLevel) / decayMs)   : kMinLevel;
-            releaseMul = (releaseMs > 0.f) ? expf(logf(kMinLevel) / releaseMs) : kMinLevel;
+            // Juno-106: times from ROM integer simulation
+            attackMs  = ADSR::AttackMs(dsp.mSliderA);
         }
-
-        float kWindowMs = j6 ? kWindowMsJ6 : kWindowMs106;
 
         // --- Layout ---
         int hTop = h / 2;
@@ -270,136 +257,161 @@ private:
         int yDivider = hTop;
         int yBotStart = hTop + 1;
 
-        // Horizontal divider line with 1-second tick marks
+        // Horizontal divider line with tick marks
         g.setColour(dim);
         g.fillRect(0.f, static_cast<float>(yDivider), static_cast<float>(w), 1.f);
-        for (int sec = 1; sec < static_cast<int>(kWindowMs / 1000.f); sec++)
+        int halfSecs = static_cast<int>(kWindowMs / 500.f);
+        for (int hs = 1; hs < halfSecs; hs++)
         {
-            float tx = std::round(sec * 1000.f / kWindowMs * (w - 1));
-            g.fillRect(tx, static_cast<float>(yDivider - 2), 1.f, 5.f);
+            float tx = std::round(hs * 500.f / kWindowMs * (w - 1));
+            bool major = (hs % 2 == 0); // whole seconds are major
+            float tickH = major ? 5.f : 3.f;
+            g.fillRect(tx, static_cast<float>(yDivider) - (tickH - 1.f) / 2.f, 1.f, tickH);
         }
 
-        // Phase boundaries as pixel positions within 15s window
+        // Phase boundary: A|D (top half)
         float xAD = std::round(std::min(attackMs / kWindowMs, 1.f) * (w - 1));
-        float xDD = std::round(std::min((attackMs + decayMs) / kWindowMs, 1.f) * (w - 1));
-        float xSR = std::round(std::max(1.f - releaseMs / kWindowMs, 0.f) * (w - 1));
-
-        // A|D and D|S boundary lines (top half)
         g.setColour(dim);
         if (xAD > 0.f && xAD < w - 1)
             g.fillRect(xAD, 0.f, 1.f, static_cast<float>(hTop));
-        if (xDD > xAD && xDD < w - 1)
-            g.fillRect(xDD, 0.f, 1.f, static_cast<float>(hTop));
 
-        // S|R boundary line (bottom half)
-        if (xSR > 0.f && xSR < w - 1)
-            g.fillRect(xSR, static_cast<float>(yBotStart), 1.f, static_cast<float>(hBot));
-
-        // Sustain level lines (both halves)
-        float susYTop = std::round((1.f - sustain) * (hTop - 1));
-        float susYBot = std::round((1.f - sustain) * (hBot - 1)) + yBotStart;
-        g.setColour(dim);
-        if (susYTop > 0.f && susYTop < hTop - 1)
-            g.fillRect(0.f, susYTop, static_cast<float>(w), 1.f);
-        if (susYBot > yBotStart && susYBot < yBotStart + hBot - 1)
-            g.fillRect(0.f, susYBot, static_cast<float>(w), 1.f);
-
-        // --- Envelope evaluation helper ---
-        // Returns envelope value [0, 1] given elapsed ms and phase
-        auto evalEnv = [&](float ms, int phase) -> float
+        // --- Draw envelope curves ---
+        if (j6)
         {
-            // phase: 0=attack, 1=decay, 2=sustain, 3=release
-            float env = 0.f;
-            if (phase == 0)
+            // J6: analytical per-ms evaluation using RC coefficients
+            auto evalEnv = [&](float ms, int phase) -> float
             {
-                if (j6)
+                float env = 0.f;
+                if (phase == 0)
                 {
                     env = kAttackTarget * (1.f - powf(1.f - attackCoeff, ms));
                     if (env > 1.f) env = 1.f;
                 }
+                else if (phase == 1)
+                    env = sustain + (1.f - sustain) * powf(1.f - decayCoeff, ms);
                 else
-                {
-                    env = (attackMs > 0.f) ? ms / attackMs : 1.f;
-                    if (env > 1.f) env = 1.f;
-                }
-            }
-            else if (phase == 1)
-            {
-                if (j6)
-                {
-                    float target = sustain + kDecayUndershoot;
-                    env = target + (1.f - target) * powf(1.f - decayCoeff, ms);
-                    if (env < sustain) env = sustain;
-                }
-                else
-                {
-                    env = powf(decayMul, ms);
-                    if (env < sustain) env = sustain;
-                }
-            }
-            else if (phase == 2)
-            {
-                env = sustain;
-            }
-            else // release
-            {
-                if (j6)
                 {
                     env = kReleaseTarget + (sustain - kReleaseTarget) * powf(1.f - releaseCoeff, ms);
                     if (env < 0.f) env = 0.f;
                 }
-                else
+                return std::clamp(env, 0.f, 1.f);
+            };
+
+            // Top half: attack + decay
+            g.setColour(bright);
+            int lastY = hTop - 1;
+            for (int px = 0; px < w; px++)
+            {
+                float ms = (static_cast<float>(px) / static_cast<float>(w - 1)) * kWindowMs;
+                float env = (ms < attackMs) ? evalEnv(ms, 0) : evalEnv(ms - attackMs, 1);
+                int y = static_cast<int>(std::round((1.f - env) * (hTop - 1)));
+                int y1 = std::min(lastY, y), y2 = std::max(lastY, y) + 1;
+                g.fillRect(static_cast<float>(px), static_cast<float>(y1),
+                           1.f, static_cast<float>(y2 - y1));
+                lastY = y;
+            }
+
+            // Bottom half: release starting from left edge
+            lastY = static_cast<int>(std::round((1.f - sustain) * (hBot - 1)));
+            for (int px = 0; px < w; px++)
+            {
+                float ms = (static_cast<float>(px) / static_cast<float>(w - 1)) * kWindowMs;
+                float env = evalEnv(ms, 2);
+                int y = static_cast<int>(std::round((1.f - env) * (hBot - 1)));
+                int y1 = std::min(lastY, y), y2 = std::max(lastY, y) + 1;
+                g.fillRect(static_cast<float>(px), static_cast<float>(y1 + yBotStart),
+                           1.f, static_cast<float>(y2 - y1));
+                lastY = y;
+            }
+        }
+        else
+        {
+            // 106: integer simulation at tick rate, interpolated to pixels
+            int decIdx = std::clamp(static_cast<int>(dsp.mSliderD * 127.f + 0.5f), 0, 127);
+            int relIdx = std::clamp(static_cast<int>(dsp.mSliderR * 127.f + 0.5f), 0, 127);
+
+            uint16_t atkInc  = ADSR::AttackIncFromSlider(dsp.mSliderA);
+            uint16_t decCoeff = kr106::kDecRelTable[decIdx];
+            uint16_t relCoeff = kr106::kDecRelTable[relIdx];
+            uint16_t susI = static_cast<uint16_t>(sustain * ADSR::kEnvMax);
+
+            static constexpr int kMaxTicks = 1429; // 6s / 4.2ms
+            float topCurve[kMaxTicks + 1];
+            float botCurve[kMaxTicks + 1];
+
+            // Simulate attack + decay (top half)
+            {
+                uint16_t envI = 0;
+                bool attacking = true;
+                for (int t = 0; t <= kMaxTicks; t++)
                 {
-                    env = sustain * powf(releaseMul, ms);
+                    topCurve[t] = static_cast<float>(envI) / ADSR::kEnvMax;
+                    if (attacking)
+                    {
+                        uint32_t sum = static_cast<uint32_t>(envI) + atkInc;
+                        if (sum >= ADSR::kEnvMax) { envI = ADSR::kEnvMax; attacking = false; }
+                        else envI = static_cast<uint16_t>(sum);
+                    }
+                    else
+                    {
+                        if (envI > susI)
+                        {
+                            uint16_t diff = envI - susI;
+                            diff = ADSR::CalcDecay(diff, decCoeff);
+                            envI = diff + susI;
+                        }
+                        else
+                            envI = susI;
+                    }
                 }
             }
-            return std::clamp(env, 0.f, 1.f);
-        };
 
-        // --- Draw top half: ADS ---
-        g.setColour(bright);
-        int lastY = hTop - 1;
+            // Simulate release from sustain (bottom half)
+            {
+                uint16_t envI = susI;
+                for (int t = 0; t <= kMaxTicks; t++)
+                {
+                    botCurve[t] = static_cast<float>(envI) / ADSR::kEnvMax;
+                    envI = ADSR::CalcDecay(envI, relCoeff);
+                }
+            }
 
-        for (int px = 0; px < w; px++)
-        {
-            float ms = (static_cast<float>(px) / static_cast<float>(w - 1)) * kWindowMs;
-            float env;
+            // Draw top half using simulated curve
+            g.setColour(bright);
+            int lastY = hTop - 1;
+            for (int px = 0; px < w; px++)
+            {
+                float ms = (static_cast<float>(px) / static_cast<float>(w - 1)) * kWindowMs;
+                float tickF = ms * ADSR::kTickRate / 1000.f;
+                int t0 = std::min(static_cast<int>(tickF), kMaxTicks - 1);
+                float frac = tickF - t0;
+                float env = topCurve[t0] + (topCurve[t0 + 1] - topCurve[t0]) * frac;
+                env = std::clamp(env, 0.f, 1.f);
 
-            if (ms < attackMs)
-                env = evalEnv(ms, 0);
-            else if (ms < attackMs + decayMs)
-                env = evalEnv(ms - attackMs, 1);
-            else
-                env = evalEnv(0.f, 2); // sustain fill
+                int y = static_cast<int>(std::round((1.f - env) * (hTop - 1)));
+                int y1 = std::min(lastY, y), y2 = std::max(lastY, y) + 1;
+                g.fillRect(static_cast<float>(px), static_cast<float>(y1),
+                           1.f, static_cast<float>(y2 - y1));
+                lastY = y;
+            }
 
-            int y = static_cast<int>(std::round((1.f - env) * (hTop - 1)));
-            int y1 = std::min(lastY, y);
-            int y2 = std::max(lastY, y) + 1;
-            g.fillRect(static_cast<float>(px), static_cast<float>(y1),
-                       1.f, static_cast<float>(y2 - y1));
-            lastY = y;
-        }
+            // Draw bottom half: release starting from left edge
+            lastY = static_cast<int>(std::round((1.f - sustain) * (hBot - 1)));
+            for (int px = 0; px < w; px++)
+            {
+                float ms = (static_cast<float>(px) / static_cast<float>(w - 1)) * kWindowMs;
+                float tickF = ms * ADSR::kTickRate / 1000.f;
+                int t0 = std::min(static_cast<int>(tickF), kMaxTicks - 1);
+                float frac = tickF - t0;
+                float env = botCurve[t0] + (botCurve[t0 + 1] - botCurve[t0]) * frac;
+                env = std::clamp(env, 0.f, 1.f);
 
-        // --- Draw bottom half: SR ---
-        lastY = static_cast<int>(std::round((1.f - sustain) * (hBot - 1)));
-
-        for (int px = 0; px < w; px++)
-        {
-            float ms = (static_cast<float>(px) / static_cast<float>(w - 1)) * kWindowMs;
-            float releaseStartMs = kWindowMs - releaseMs;
-            float env;
-
-            if (ms < releaseStartMs)
-                env = evalEnv(0.f, 2); // sustain fill
-            else
-                env = evalEnv(ms - releaseStartMs, 3);
-
-            int y = static_cast<int>(std::round((1.f - env) * (hBot - 1)));
-            int y1 = std::min(lastY, y);
-            int y2 = std::max(lastY, y) + 1;
-            g.fillRect(static_cast<float>(px), static_cast<float>(y1 + yBotStart),
-                       1.f, static_cast<float>(y2 - y1));
-            lastY = y;
+                int y = static_cast<int>(std::round((1.f - env) * (hBot - 1)));
+                int y1 = std::min(lastY, y), y2 = std::max(lastY, y) + 1;
+                g.fillRect(static_cast<float>(px), static_cast<float>(y1 + yBotStart),
+                           1.f, static_cast<float>(y2 - y1));
+                lastY = y;
+            }
         }
     }
 
