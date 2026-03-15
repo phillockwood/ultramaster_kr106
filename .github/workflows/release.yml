@@ -31,6 +31,9 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
           rm cert.p12
 
+      - name: List build artifacts
+        run: find build/KR106_artefacts -type f -o -type d | head -80
+
       - name: Sign plugins
         run: |
           ARTS=build/KR106_artefacts
