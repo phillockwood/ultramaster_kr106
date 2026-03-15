@@ -8,11 +8,23 @@ KR106AudioProcessor::KR106AudioProcessor()
 {
   // --- Sliders (0–1 range) ---
   using SFV = std::function<juce::String(float, int)>;
+  using VFS = std::function<float(const juce::String&)>;
   auto addSlider = [this](int idx, const char* name, float def,
                           float min = 0.f, float max = 1.f,
-                          SFV fmt = nullptr) {
+                          SFV fmt = nullptr, VFS vfs = nullptr) {
+    // For 0-1 sliders, append 7-bit SysEx value for debugging
+    SFV displayFmt = std::move(fmt);
+    if (min == 0.f && max == 1.f)
+    {
+      displayFmt = [f = std::move(displayFmt)](float v, int maxLen) {
+        juce::String base = f ? f(v, maxLen)
+                              : juce::String(juce::roundToInt(v * 100.f)) + "%";
+        return base + " [" + juce::String(juce::roundToInt(v * 127.f)) + "]";
+      };
+    }
     auto attrs = juce::AudioParameterFloatAttributes();
-    if (fmt) attrs = attrs.withStringFromValueFunction(std::move(fmt));
+    if (displayFmt) attrs = attrs.withStringFromValueFunction(std::move(displayFmt));
+    if (vfs) attrs = attrs.withValueFromStringFunction(std::move(vfs));
     auto* p = new juce::AudioParameterFloat(
       juce::ParameterID("p" + juce::String(idx), 1), name,
       juce::NormalisableRange<float>(min, max), def, attrs);
@@ -44,6 +56,35 @@ KR106AudioProcessor::KR106AudioProcessor()
   SFV fmtPct = [](float v, int) {
     return juce::String(juce::roundToInt(v * 100.f)) + "%";
   };
+  VFS parsePct = [](const juce::String& text) -> float {
+    return juce::jlimit(0.f, 1.f, text.getFloatValue() / 100.f);
+  };
+
+  // Generic binary search: find slider value (0-1) that produces target output
+  // from a monotonically increasing slider→value function.
+  auto bsearch = [](std::function<float(float)> fn, float target) -> float {
+    float lo = 0.f, hi = 1.f;
+    for (int i = 0; i < 32; i++)
+    {
+      float mid = (lo + hi) * 0.5f;
+      if (fn(mid) < target) lo = mid; else hi = mid;
+    }
+    return (lo + hi) * 0.5f;
+  };
+
+  // Parse text with "k" suffix support (e.g. "2 kHz" → 2000)
+  auto parseHz = [](const juce::String& text) {
+    float hz = text.getFloatValue();
+    if (text.containsIgnoreCase("k")) hz *= 1000.f;
+    return hz;
+  };
+  // Parse text with "s" suffix (e.g. "1.5 s" → 1500 ms)
+  auto parseMs = [](const juce::String& text) {
+    float ms = text.getFloatValue();
+    if (text.containsIgnoreCase("s") && !text.containsIgnoreCase("ms")) ms *= 1000.f;
+    return ms;
+  };
+
   SFV fmtVcfHz = [this](float v, int) {
     float hz;
     if (mDSP.mAdsrMode == 0)
@@ -53,24 +94,47 @@ KR106AudioProcessor::KR106AudioProcessor()
     if (hz >= 1000.f) return juce::String(hz / 1000.f, 1) + " kHz";
     return juce::String(juce::roundToInt(hz)) + " Hz";
   };
+  VFS parseVcfHz = [this, bsearch, parseHz](const juce::String& text) -> float {
+    float hz = juce::jlimit(1.f, 20000.f, parseHz(text));
+    return bsearch([this](float v) {
+      return (mDSP.mAdsrMode == 0)
+          ? kr106::j6_vcf_freq_from_slider(v)
+          : kr106::dacToHz(static_cast<uint16_t>(v * 0x3F80));
+    }, hz);
+  };
   SFV fmtLfoRate = [this](float v, int) {
     float hz = (mDSP.mAdsrMode == 0) ? kr106::LFO::lfoFreqJ6(v)
                                       : kr106::LFO::lfoFreqJ106(v);
     return juce::String(hz, 1) + " Hz";
   };
+  VFS parseLfoRate = [this, bsearch, parseHz](const juce::String& text) -> float {
+    return bsearch([this](float v) {
+      return (mDSP.mAdsrMode == 0) ? kr106::LFO::lfoFreqJ6(v)
+                                    : kr106::LFO::lfoFreqJ106(v);
+    }, parseHz(text));
+  };
   SFV fmtLfoDelay = [](float v, int) {
     if (v <= 0.f) return juce::String("Off");
     return juce::String(juce::roundToInt(v * 1500.f)) + " ms";
+  };
+  VFS parseLfoDelay = [](const juce::String& text) -> float {
+    return juce::jlimit(0.f, 1.f, text.getFloatValue() / 1500.f);
   };
   SFV fmtVcaLevel = [](float v, int) {
     double dB = ((double)v * 2.0 - 1.0) * 6.0;
     if (dB >= 0.0) return "+" + juce::String(dB, 1) + " dB";
     return juce::String(dB, 1) + " dB";
   };
+  VFS parseVcaLevel = [](const juce::String& text) -> float {
+    return juce::jlimit(0.f, 1.f, static_cast<float>(text.getDoubleValue() / 12.0 + 0.5));
+  };
   SFV fmtTuning = [](float v, int) {
     double cents = (double)v * 100.0;
     if (cents >= 0.0) return "+" + juce::String(juce::roundToInt(cents)) + " cents";
     return juce::String(juce::roundToInt(cents)) + " cents";
+  };
+  VFS parseTuning = [](const juce::String& text) -> float {
+    return juce::jlimit(-1.f, 1.f, text.getFloatValue() / 100.f);
   };
   SFV fmtPorta = [](float v, int) {
     float semiPerSec = kr106::Voice<float>::portaRate(v);
@@ -80,6 +144,21 @@ KR106AudioProcessor::KR106AudioProcessor()
     if (ms >= 1000.0) return juce::String(ms / 1000.0, 2) + " s/oct";
     return juce::String(juce::roundToInt(ms)) + " ms/oct";
   };
+  VFS parsePorta = [bsearch, parseMs](const juce::String& text) -> float {
+    if (text.containsIgnoreCase("off")) return 0.f;
+    float ms = parseMs(text);
+    // porta display is ms/oct = 12000/portaRate; portaRate is monotonically
+    // DECREASING (high slider = slow = large ms), so search in reverse
+    float lo = 0.001f, hi = 1.f;
+    for (int i = 0; i < 32; i++)
+    {
+      float mid = (lo + hi) * 0.5f;
+      float rate = kr106::Voice<float>::portaRate(mid);
+      float testMs = (rate > 0.f) ? 12000.f / rate : 1e6f;
+      if (testMs < ms) lo = mid; else hi = mid;
+    }
+    return (lo + hi) * 0.5f;
+  };
   using ADSR = kr106::ADSR;
   auto fmtAtkMs = [this](float v, int) -> juce::String {
     bool j6 = mParams[kAdsrMode] && mParams[kAdsrMode]->getValue() < 0.5f;
@@ -87,38 +166,63 @@ KR106AudioProcessor::KR106AudioProcessor()
     if (ms >= 1000.f) return juce::String(ms / 1000.f, 2) + " s";
     return juce::String(juce::roundToInt(ms)) + " ms";
   };
+  VFS parseAtkMs = [this, bsearch, parseMs](const juce::String& text) -> float {
+    float ms = parseMs(text);
+    return bsearch([this](float v) {
+      bool j6 = mParams[kAdsrMode] && mParams[kAdsrMode]->getValue() < 0.5f;
+      return j6 ? 0.001500f * std::exp(11.7382f * v + -4.7207f * v * v) * 1791.8f
+                : ADSR::AttackMs(v);
+    }, ms);
+  };
   auto fmtDRMs = [this](float v, int) -> juce::String {
     bool j6 = mParams[kAdsrMode] && mParams[kAdsrMode]->getValue() < 0.5f;
-    float ms = j6 ? 0.003577f * std::exp(12.9460f * v + -5.0638f * v * v) * 3000.f : ADSR::DecRelMs(v);
+    float ms = j6 ? 0.003577f * std::exp(12.9460f * v + -5.0638f * v * v) * 9966.f : ADSR::DecRelMs(v);
     if (ms >= 1000.f) return juce::String(ms / 1000.f, 2) + " s";
     return juce::String(juce::roundToInt(ms)) + " ms";
   };
+  VFS parseDRMs = [this, bsearch, parseMs](const juce::String& text) -> float {
+    float ms = parseMs(text);
+    return bsearch([this](float v) {
+      bool j6 = mParams[kAdsrMode] && mParams[kAdsrMode]->getValue() < 0.5f;
+      return j6 ? 0.003577f * std::exp(12.9460f * v + -5.0638f * v * v) * 9966.f
+                : ADSR::DecRelMs(v);
+    }, ms);
+  };
 
   // Bender sensitivity sliders
-  addSlider(kBenderDco,  "Bender DCO",  0.f, 0.f, 1.f, fmtPct);
-  addSlider(kBenderVcf,  "Bender VCF",  0.f, 0.f, 1.f, fmtPct);
-  addSlider(kBenderLfo,  "Bender LFO",  0.f, 0.f, 1.f, fmtPct);
+  addSlider(kBenderDco,  "Bender DCO",  0.f, 0.f, 1.f, fmtPct, parsePct);
+  addSlider(kBenderVcf,  "Bender VCF",  0.f, 0.f, 1.f, fmtPct, parsePct);
+  addSlider(kBenderLfo,  "Bender LFO",  0.f, 0.f, 1.f, fmtPct, parsePct);
 
   addSlider(kArpRate, "Arp Rate", 0.06f, 0.f, 1.f, [](float v, int) {
     return juce::String(juce::roundToInt(kr106::Arpeggiator::arpRate(v))) + " bpm";
+  }, [bsearch](const juce::String& text) -> float {
+    return bsearch([](float v) { return kr106::Arpeggiator::arpRate(v); },
+                   text.getFloatValue());
   });
 
-  
-
   // LFO
-  addSlider(kLfoRate,    "LFO Rate",    0.24f, 0.f, 1.f, fmtLfoRate);
-  addSlider(kLfoDelay,   "LFO Delay",   0.f,   0.f, 1.f, fmtLfoDelay);
+  addSlider(kLfoRate,    "LFO Rate",    0.24f, 0.f, 1.f, fmtLfoRate, parseLfoRate);
+  addSlider(kLfoDelay,   "LFO Delay",   0.f,   0.f, 1.f, fmtLfoDelay, parseLfoDelay);
 
   // DCO
-  addSlider(kDcoLfo,     "DCO LFO",     0.f, 0.f, 1.f, [this](float v, int) {
+  SFV fmtDcoLfo = [this](float v, int) -> juce::String {
     float st = (mDSP.mAdsrMode == 0) ? kr106::Voice<float>::dcoLfoDepth6(v)
                                       : kr106::Voice<float>::dcoLfoDepth106(v);
     if (st < 0.05f) return juce::String("Off");
     return juce::String(st, 1) + " st";
-  });
-  addSlider(kDcoPwm,     "DCO PWM",     0.f, 0.f, 1.f, fmtPct);
-  addSlider(kDcoSub,     "DCO Sub",     1.f, 0.f, 1.f, fmtPct);
-  addSlider(kDcoNoise,   "DCO Noise",   0.f, 0.f, 1.f, fmtPct);
+  };
+  VFS parseDcoLfo = [this, bsearch](const juce::String& text) -> float {
+    if (text.containsIgnoreCase("off")) return 0.f;
+    return bsearch([this](float v) {
+      return (mDSP.mAdsrMode == 0) ? kr106::Voice<float>::dcoLfoDepth6(v)
+                                    : kr106::Voice<float>::dcoLfoDepth106(v);
+    }, text.getFloatValue());
+  };
+  addSlider(kDcoLfo,     "DCO LFO",     0.f, 0.f, 1.f, fmtDcoLfo, parseDcoLfo);
+  addSlider(kDcoPwm,     "DCO PWM",     0.f, 0.f, 1.f, fmtPct, parsePct);
+  addSlider(kDcoSub,     "DCO Sub",     1.f, 0.f, 1.f, fmtPct, parsePct);
+  addSlider(kDcoNoise,   "DCO Noise",   0.f, 0.f, 1.f, fmtPct, parsePct);
 
   // HPF (4-position switch)
   SFI fmtHpf = [](int v, int) -> juce::String {
@@ -128,25 +232,33 @@ KR106AudioProcessor::KR106AudioProcessor()
   addSwitch(kHpfFreq,    "HPF",         1, 0, 3, fmtHpf);
 
   // VCF
-  addSlider(kVcfFreq,    "VCF Freq",    0.5f, 0.f, 1.f, fmtVcfHz);
-  addSlider(kVcfRes,     "VCF Res",     0.f,  0.f, 1.f, fmtPct);
-  addSlider(kVcfEnv,     "VCF Env",     0.f,  0.f, 1.f, fmtPct);
-  addSlider(kVcfLfo,     "VCF LFO",     0.f,  0.f, 1.f, [this](float v, int) {
+  addSlider(kVcfFreq,    "VCF Freq",    0.5f, 0.f, 1.f, fmtVcfHz, parseVcfHz);
+  addSlider(kVcfRes,     "VCF Res",     0.f,  0.f, 1.f, fmtPct, parsePct);
+  addSlider(kVcfEnv,     "VCF Env",     0.f,  0.f, 1.f, fmtPct, parsePct);
+  SFV fmtVcfLfo = [this](float v, int) -> juce::String {
     float st = (mDSP.mAdsrMode == 0) ? kr106::Voice<float>::vcfLfoDepth6(v)
                                       : kr106::Voice<float>::vcfLfoDepth106(v);
     if (st < 0.5f) return juce::String("Off");
     return juce::String(st, 1) + " st";
-  });
-  addSlider(kVcfKbd,     "VCF Kbd",     0.f,  0.f, 1.f, fmtPct);
+  };
+  VFS parseVcfLfo = [this, bsearch](const juce::String& text) -> float {
+    if (text.containsIgnoreCase("off")) return 0.f;
+    return bsearch([this](float v) {
+      return (mDSP.mAdsrMode == 0) ? kr106::Voice<float>::vcfLfoDepth6(v)
+                                    : kr106::Voice<float>::vcfLfoDepth106(v);
+    }, text.getFloatValue());
+  };
+  addSlider(kVcfLfo,     "VCF LFO",     0.f,  0.f, 1.f, fmtVcfLfo, parseVcfLfo);
+  addSlider(kVcfKbd,     "VCF Kbd",     0.f,  0.f, 1.f, fmtPct, parsePct);
 
   // VCA
-  addSlider(kVcaLevel,   "Volume",      0.5f, 0.f, 1.f, fmtVcaLevel);
+  addSlider(kVcaLevel,   "Volume",      0.5f, 0.f, 1.f, fmtVcaLevel, parseVcaLevel);
 
   // ADSR (raw 0-1 slider values; DSP applies curve + range via LUT)
-  addSlider(kEnvA,       "Attack",      0.25f, 0.f, 1.f, fmtAtkMs);
-  addSlider(kEnvD,       "Decay",       0.25f, 0.f, 1.f, fmtDRMs);
-  addSlider(kEnvS,       "Sustain",     0.9f,  0.f, 1.f, fmtPct);
-  addSlider(kEnvR,       "Release",     0.25f, 0.f, 1.f, fmtDRMs);
+  addSlider(kEnvA,       "Attack",      0.25f, 0.f, 1.f, fmtAtkMs, parseAtkMs);
+  addSlider(kEnvD,       "Decay",       0.25f, 0.f, 1.f, fmtDRMs, parseDRMs);
+  addSlider(kEnvS,       "Sustain",     0.9f,  0.f, 1.f, fmtPct, parsePct);
+  addSlider(kEnvR,       "Release",     0.25f, 0.f, 1.f, fmtDRMs, parseDRMs);
 
   // Toggle buttons
   addBool(kTranspose,    "Transpose",   false);
@@ -171,10 +283,10 @@ KR106AudioProcessor::KR106AudioProcessor()
 
   // Special controls
   addSlider(kBender,       "Bender",      0.f, -1.f, 1.f);
-  addSlider(kTuning,       "Tuning",      0.f, -1.f, 1.f, fmtTuning);
+  addSlider(kTuning,       "Tuning",      0.f, -1.f, 1.f, fmtTuning, parseTuning);
   addBool(kPower,          "Power",       true);
   addSwitch(kPortaMode,    "Porta Mode",  2, 0, 2);
-  addSlider(kPortaRate,    "Porta Rate",  0.f, 0.f, 1.f, fmtPorta);
+  addSlider(kPortaRate,    "Porta Rate",  0.f, 0.f, 1.f, fmtPorta, parsePorta);
   addSwitch(kTransposeOffset, "Transpose Offset", 0, -24, 36);
 
   // Master volume knob (applied after scope, before output)
@@ -184,7 +296,12 @@ KR106AudioProcessor::KR106AudioProcessor()
     if (dB >= 0.0) return "+" + juce::String(dB, 1) + " dB";
     return juce::String(dB, 1) + " dB";
   };
-  addSlider(kMasterVol, "Master Volume", 0.2f, 0.f, 1.f, fmtMasterVol);
+  VFS parseMasterVol = [](const juce::String& text) -> float {
+    if (text.containsIgnoreCase("inf")) return 0.f;
+    double dB = text.getDoubleValue();
+    return juce::jlimit(0.f, 1.f, static_cast<float>(std::pow(10.0, dB / 20.0)));
+  };
+  addSlider(kMasterVol, "Master Volume", 0.2f, 0.f, 1.f, fmtMasterVol, parseMasterVol);
 }
 
 void KR106AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)

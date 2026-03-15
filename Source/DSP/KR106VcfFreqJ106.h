@@ -43,12 +43,12 @@ inline uint16_t vcf_sub(uint16_t ea, uint16_t bc, bool& overflow)
 // Clamp to 14-bit DAC range 0x0000–0x3FFF.
 // EAH bits 6-7 set (ea > 0x3FFF) catches both genuine upward overflow
 // and wrapped-below-zero values. The underflow flag distinguishes them:
-//   overflow=true  → value wrapped below zero → clamp to 0x3FFF (max)
-//   overflow=false → genuine upward overflow  → clamp to 0x0000 (min)
-inline uint16_t vcf_clamp(uint16_t ea, bool overflow)
+//   underflow=true  → value wrapped below zero → clamp to 0x0000 (min)
+//   underflow=false → genuine upward overflow  → clamp to 0x3FFF (max)
+inline uint16_t vcf_clamp(uint16_t ea, bool underflow)
 {
   if (ea > 0x3FFF)
-    return overflow ? 0x3FFF : 0x0000;
+    return underflow ? 0x0000 : 0x3FFF;
   return ea;
 }
 

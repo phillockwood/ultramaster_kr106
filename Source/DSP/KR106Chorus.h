@@ -211,9 +211,11 @@ struct Chorus
   // Dry/wet mix from schematic: IC8 inverting summer per channel.
   //   Dry: -R70/R71 = -100K/47K = gain 2.128
   //   Wet: -R70/R72 = -100K/39K = gain 2.564
-  // Normalized to unit sum: dry = 0.454, wet = 0.546.
-  static constexpr float kDryGain = 2.128f / (2.128f + 2.564f); // 0.454
-  static constexpr float kWetGain = 2.564f / (2.128f + 2.564f); // 0.546
+  // Measured chorus ON vs OFF: ~3-5 dB boost (using +4 dB midpoint = 1.585x).
+  // Resistor ratio sets dry:wet balance, total scaled to match measured boost.
+  static constexpr float kChorusBoost = 1.585f;  // +4 dB measured ON vs OFF
+  static constexpr float kDryGain = 2.128f / (2.128f + 2.564f) * kChorusBoost; // 0.719
+  static constexpr float kWetGain = 2.564f / (2.128f + 2.564f) * kChorusBoost; // 0.866
 
   // Crossfade for mode switching (avoids clicks)
   static constexpr float kFadeMs = 5.f;

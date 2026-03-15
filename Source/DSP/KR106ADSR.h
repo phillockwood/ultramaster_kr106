@@ -206,14 +206,15 @@ struct ADSR
     return std::max(1.5f, ticks / kTickRate * 1000.f);
   }
 
-  // Decay/Release: simulate integer decay from max to 50%, return time in ms.
+  // Decay/Release: simulate integer decay from max to -20dB (10%), return time in ms.
+  // -20dB matches perceived decay length observed in hardware recordings.
   // Uses CalcDecay integer truncation for accuracy matching actual audio behavior.
   static float DecRelMs(float slider)
   {
     int idx = std::clamp(static_cast<int>(slider * 127.f + 0.5f), 0, 127);
     uint16_t coeff = kDecRelTable[idx];
     uint16_t val = kEnvMax;
-    uint16_t target = kEnvMax / 2;
+    uint16_t target = kEnvMax / 10;  // -20dB
     int ticks = 0;
     while (val > target && ticks < 50000)
     {

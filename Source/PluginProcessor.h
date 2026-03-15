@@ -37,7 +37,7 @@ public:
   juce::AudioProcessorEditor* createEditor() override;
   bool hasEditor() const override { return true; }
 
-  const juce::String getName() const override { return "KR106"; }
+  const juce::String getName() const override { return "KR-106"; }
   bool acceptsMidi() const override { return true; }
   bool producesMidi() const override { return true; }
   double getTailLengthSeconds() const override { return 0.0; }

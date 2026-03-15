@@ -172,26 +172,8 @@ private:
     juce::String raw = mEditor->getText().trim();
     if (raw.isEmpty()) { dismissEdit(); return; }
 
-    float typedNum = extractLeadingNumber(raw);
-    juce::String typedUnit = extractUnit(raw);
-
-    // Normalize to base units: kHz→Hz, s→ms, s/oct→ms/oct
-    if (typedUnit == "khz") typedNum *= 1000.f;
-    else if (typedUnit == "s/oct") typedNum *= 1000.f;
-    else if (typedUnit == "s") typedNum *= 1000.f;
-
-    // Binary search the 0–1 normalized range for the matching display value
-    float lo = 0.f, hi = 1.f;
-    bool inverted = getDisplayValueInBaseUnits(0.f) > getDisplayValueInBaseUnits(1.f);
-    for (int iter = 0; iter < 50; iter++)
-    {
-      float mid = (lo + hi) * 0.5f;
-      float midVal = getDisplayValueInBaseUnits(mid);
-      bool goHigh = inverted ? (midVal > typedNum) : (midVal < typedNum);
-      if (goHigh) lo = mid; else hi = mid;
-    }
-
-    float normalized = juce::jlimit(0.f, 1.f, (lo + hi) * 0.5f);
+    // Delegate to the parameter's valueFromString (set via VFS in PluginProcessor)
+    float normalized = juce::jlimit(0.f, 1.f, mParam->getValueForText(raw));
     mParam->beginChangeGesture();
     mParam->setValueNotifyingHost(normalized);
     mParam->endChangeGesture();
@@ -229,42 +211,6 @@ private:
     while (i < len && (juce::CharacterFunctions::isDigit(text[i]) || text[i] == '.'))
     { if (text[i] != '.') hasDigit = true; i++; }
     return hasDigit ? i : len;
-  }
-
-  // Extract leading number from formatted text (e.g. "+5.0 Hz" → 5.0)
-  static float extractLeadingNumber(const juce::String& text)
-  {
-    int i = 0, len = text.length();
-    while (i < len && text[i] == ' ') i++;
-    int start = i;
-    if (i < len && (text[i] == '+' || text[i] == '-')) i++;
-    bool hasDigit = false;
-    while (i < len && (juce::CharacterFunctions::isDigit(text[i]) || text[i] == '.'))
-    { if (text[i] != '.') hasDigit = true; i++; }
-    return hasDigit ? text.substring(start, i).getFloatValue() : 0.f;
-  }
-
-  // Extract unit suffix from text (e.g. "5.0 Hz" → "hz"), case-insensitive
-  static juce::String extractUnit(const juce::String& text)
-  {
-    int i = 0, len = text.length();
-    while (i < len && text[i] == ' ') i++;
-    if (i < len && (text[i] == '+' || text[i] == '-')) i++;
-    while (i < len && (juce::CharacterFunctions::isDigit(text[i]) || text[i] == '.')) i++;
-    return text.substring(i).trim().toLowerCase();
-  }
-
-  // Get display value in base units (Hz not kHz, ms not s) at a normalized position
-  float getDisplayValueInBaseUnits(float normalized) const
-  {
-    juce::String text = mParam->getText(normalized, 100);
-    if (text.containsIgnoreCase("inf")) return -1000.f;
-    float num = extractLeadingNumber(text);
-    juce::String unit = extractUnit(text);
-    if (unit == "khz") return num * 1000.f;
-    if (unit == "s/oct") return num * 1000.f;
-    if (unit == "s") return num * 1000.f;
-    return num;
   }
 
   int getNumSteps() const
