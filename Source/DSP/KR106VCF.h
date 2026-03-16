@@ -207,7 +207,7 @@ private:
     //   R=7 (res=0.7): k ≈ 3.52, measured slope ≈ -26.8 dB/oct
     //   R=0 slope (-13.1 dB/oct) matches sim with k=0 (no fit needed).
     //
-    // Juno-106 NOT YET MEASURED. Same topology (ext transistor → BA662)
+    // FIXME Juno-106 NOT YET MEASURED. Same topology (ext transistor → BA662)
     // but different resistor scaling (20K trim + 27K vs 6's 15K/1.5K/1.5K).
     // Expect same exponential shape with different a/b coefficients.
     float k = 1.024f * (expf(2.128f * res) - 1.f);
@@ -242,7 +242,7 @@ private:
     // signal alongside the feedback, boosting drive at high resonance.
     // This counteracts the passband volume drop and pushes the OTA
     // nonlinearities harder — a key part of the Juno's warmth.
-    float comp = 1.f + res * res * 0.5f;  // gentle quadratic ramp
+    float comp = 1.f + k * 0.06f;  // scale with actual feedback gain
     float u = (input * comp - k * OTASat(S)) / (1.f + k * G);
 
     float lp4;
@@ -254,8 +254,12 @@ private:
       // the target cutoff. Boost g for the stages only — the feedback
       // equation (G, S, u) uses the un-boosted g so the resonance
       // onset threshold is unaffected.
-      float gNL  = g * (1.f + res * res * g * 0.9f);
-      float g1NL = gNL / (1.f + gNL);
+      // Boost g1 directly so the compensation is frequency-independent.
+      // Boosting g and then computing g1 = g/(1+g) loses boost at higher
+      // frequencies where g is larger. Deriving gNL back from g1NL keeps
+      // both consistent for the NR solver (g1NL = gNL/(1+gNL)).
+      float g1NL = g1 * (1.f + k * 0.082f);
+      float gNL  = g1NL / (1.f - g1NL);
 
       float lp1 = NLStage(mS[0], u,   gNL, g1NL);
       float lp2 = NLStage(mS[1], lp1, gNL, g1NL);
@@ -265,11 +269,14 @@ private:
     else
     {
       // Linear stages: predictor above is exact, unconditionally stable.
+      // Small g1 boost compensates for OTASat compression on the feedback
+      // path (u equation), which pulls self-oscillation frequency slightly flat.
+      float g1L = g1 * (1.f + k * 0.0003f);
       float v, s;
-      s = mS[0]; v = g1 * (u - s);   mS[0] = s + 2.f * v; float lp1 = s + v;
-      s = mS[1]; v = g1 * (lp1 - s); mS[1] = s + 2.f * v; float lp2 = s + v;
-      s = mS[2]; v = g1 * (lp2 - s); mS[2] = s + 2.f * v; float lp3 = s + v;
-      s = mS[3]; v = g1 * (lp3 - s); mS[3] = s + 2.f * v; lp4       = s + v;
+      s = mS[0]; v = g1L * (u - s);   mS[0] = s + 2.f * v; float lp1 = s + v;
+      s = mS[1]; v = g1L * (lp1 - s); mS[1] = s + 2.f * v; float lp2 = s + v;
+      s = mS[2]; v = g1L * (lp2 - s); mS[2] = s + 2.f * v; float lp3 = s + v;
+      s = mS[3]; v = g1L * (lp3 - s); mS[3] = s + 2.f * v; lp4       = s + v;
     }
 
     // Flush denormals from integrator states
