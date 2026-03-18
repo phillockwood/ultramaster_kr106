@@ -6,15 +6,17 @@ KR106Editor::KR106Editor(KR106AudioProcessor& p)
 {
     setSize(940, 224);
 
-    // On non-HiDPI displays, scale UI 2x so @2x images render at native resolution.
-    // Keep logical size at 940x224 — JUCE sizes the host window from size * transform.
-    auto& displays = juce::Desktop::getInstance().getDisplays();
-    auto* display = displays.getPrimaryDisplay();
-    if (display && display->scale < 1.5)
+    // Restore saved scale, or auto-detect: 2x on non-HiDPI, 1x on Retina.
+    if (p.mUIScale > 0.f)
+        mUIScale = p.mUIScale;
+    else
     {
-        mUIScale = 2.f;
-        setTransform(juce::AffineTransform::scale(2.0f));
+        auto& displays = juce::Desktop::getInstance().getDisplays();
+        auto* display = displays.getPrimaryDisplay();
+        mUIScale = (display && display->scale < 1.5) ? 2.f : 1.f;
     }
+    if (mUIScale != 1.f)
+        setTransform(juce::AffineTransform::scale(mUIScale));
 
     // Load @2x images from binary data
     auto loadImg = [](const void* data, int size) {
@@ -162,6 +164,7 @@ void KR106Editor::mouseDown(const juce::MouseEvent& e)
         if (s > 0.f && s != mUIScale)
         {
             mUIScale = s;
+            mProcessor.mUIScale = s;
             if (s == 1.f)
                 setTransform({});
             else

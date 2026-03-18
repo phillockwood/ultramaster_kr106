@@ -536,6 +536,10 @@ void KR106AudioProcessor::getStateInformation(juce::MemoryBlock& destData)
   stream.writeInt(kNumParams);
   for (int i = 0; i < kNumParams; i++)
     stream.writeFloat(getParamValue(i));
+
+  // UI state (backwards-compatible: old hosts just ignore extra bytes)
+  stream.writeInt(0x4B523130); // 'KR10' magic
+  stream.writeFloat(mUIScale);
 }
 
 void KR106AudioProcessor::setStateInformation(const void* data, int sizeInBytes)
@@ -550,6 +554,10 @@ void KR106AudioProcessor::setStateInformation(const void* data, int sizeInBytes)
     if (mParams[i] != nullptr)
       mParams[i]->setValueNotifyingHost(mParams[i]->convertTo0to1(val));
   }
+
+  // Read UI state if present (magic marker check for backwards compatibility)
+  if (!stream.isExhausted() && stream.readInt() == 0x4B523130)
+    mUIScale = stream.readFloat();
 }
 
 // --- Program / Preset management ---

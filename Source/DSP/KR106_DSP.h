@@ -153,6 +153,15 @@ public:
     ForEachVoice([](kr106::Voice<T>& v) { v.Release(); });
   }
 
+  void GlideUnisonVoices(int note)
+  {
+    double pitch = MidiToPitch(note);
+    ForEachVoice([pitch, note](kr106::Voice<T>& v) {
+      v.mMidiNote = note;
+      v.SetUnisonPitch(pitch);
+    });
+  }
+
   int FindLowestFreeVoice()
   {
     int nv = static_cast<int>(NVoices());
@@ -208,9 +217,12 @@ public:
         auto it = std::find(mUnisonStack.begin(), mUnisonStack.end(), note);
         if (it != mUnisonStack.end()) mUnisonStack.erase(it);
         mUnisonStack.push_back(note);
-        if (mUnisonNote >= 0) ReleaseUnisonVoices();
+        bool wasPlaying = (mUnisonNote >= 0);
         mUnisonNote = note;
-        TriggerUnisonVoices(note, velocity);
+        if (wasPlaying)
+          GlideUnisonVoices(note);
+        else
+          TriggerUnisonVoices(note, velocity);
       }
       else
       {
@@ -219,7 +231,7 @@ public:
         if (note == mUnisonNote)
         {
           if (!mUnisonStack.empty())
-          { mUnisonNote = mUnisonStack.back(); TriggerUnisonVoices(mUnisonNote, 127); }
+          { mUnisonNote = mUnisonStack.back(); GlideUnisonVoices(mUnisonNote); }
           else
           { ReleaseUnisonVoices(); mUnisonNote = -1; }
         }
@@ -475,7 +487,7 @@ private:
       else if (mUnisonNote >= 0 && !mHeldNotes.test(mUnisonNote))
       { /* Current note wasn't held — keep playing it */ }
       else if (!mUnisonStack.empty())
-      { mUnisonNote = mUnisonStack.back(); TriggerUnisonVoices(mUnisonNote, 127); }
+      { mUnisonNote = mUnisonStack.back(); GlideUnisonVoices(mUnisonNote); }
     }
     else
     {

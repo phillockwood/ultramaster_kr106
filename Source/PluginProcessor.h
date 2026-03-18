@@ -59,6 +59,7 @@ public:
   juce::RangedAudioParameter* getParam(int idx) { return mParams[idx]; }
 
   KR106DSP<float> mDSP{6};
+  float mUIScale = 0.f;  // 0 = auto-detect (default), otherwise 1.0/1.5/2.0
 
   // Scope ring buffer (audio writes, UI reads via timer)
   static constexpr int kScopeRingSize = 4096;

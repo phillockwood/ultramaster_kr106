@@ -174,6 +174,11 @@ public:
   // voice firmware table at ROM address $0A80_lfoDepthTbl, 128 single-byte
   // entries. No table data copied.
   //
+  // ANALOG TAPER: The physical slider is a 50K linear pot with a 10K resistor
+  // from wiper to ground. This creates a non-linear voltage curve before the
+  // ADC: V(x) = x / (1 + kx - kx²) where k = R_pot/R_shunt = 5. The curve
+  // compresses the mid/upper range, giving fine control at low depths.
+  //
   // FIRMWARE MECHANICS: The returned value (scaled to 0–255 internally) is
   // stored at $FF49_lfoToPitchScaler. Each frame it is multiplied by the LFO
   // delay envelope (0–$FF), then by the current LFO value (0–$1FFF), with
@@ -192,6 +197,10 @@ public:
 
   static float dcoLfoDepth106(float t)
   {
+    // Analog taper: 10K shunt to ground on 50K linear pot.
+    // V(x) = x / (1 + kx - kx²), k = R_pot / R_shunt = 5.
+    t = t / (1.f + 5.f * t - 5.f * t * t);
+
     float i = t * 127.f;
 
     // Dead zone: bottom three table entries are zero.
@@ -324,10 +333,11 @@ public:
     bool bendPol = (mRawBend < 0.f);
     uint16_t vcfBendAmt = kr106::calc_vcf_bend_amt(mVcfBendSensInt, bendVal);
 
-    // Pitch: 8.8 fixed-point semitones (MIDI note + octave transpose)
-    int noteWithTranspose = mMidiNote + static_cast<int>(mOctTranspose);
+    // Pitch: 8.8 fixed-point semitones from gliding pitch (follows portamento)
+    // mGlidePitch is in octaves relative to A440: MIDI note = glidePitch * 12 + 69
+    float glideMidi = mGlidePitch * 12.f + 69.f + mOctTranspose;
     uint16_t pitch88 = static_cast<uint16_t>(
-        std::clamp(noteWithTranspose, 0, 127) << 8);
+        std::clamp(static_cast<int>(glideMidi * 256.f), 0, 127 << 8));
 
     bool envPol = (mVcfEnvInvert > 0);
     mVcfDacNext = kr106::calc_vcf_freq(
@@ -362,9 +372,9 @@ public:
 
       // Compute initial VCF DAC with the post-attack envelope so the
       // filter cutoff starts at the correct frequency on the first sample.
-      int noteWithTranspose = mMidiNote + static_cast<int>(mOctTranspose);
+      float glideMidi = mGlidePitch * 12.f + 69.f + mOctTranspose;
       uint16_t pitch88 = static_cast<uint16_t>(
-          std::clamp(noteWithTranspose, 0, 127) << 8);
+          std::clamp(static_cast<int>(glideMidi * 256.f), 0, 127 << 8));
       bool envPol = (mVcfEnvInvert > 0);
       mVcfDacNext = kr106::calc_vcf_freq(
           mVcfCutoffInt, 0, 0,
@@ -441,7 +451,7 @@ public:
       if (mPortaEnabled)
       {
         float diff = targetPitch - mGlidePitch;
-        if (fabsf(diff) > mPortaStep)
+        if (mPortaStep > 0.f && fabsf(diff) > mPortaStep)
           mGlidePitch += (diff > 0.f) ? mPortaStep : -mPortaStep;
         else
           mGlidePitch = targetPitch;
