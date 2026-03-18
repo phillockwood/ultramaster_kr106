@@ -43,13 +43,15 @@ public:
             paintWaveform(g, w, h, black, dim, mid, bright);
         else if (mScaleIdx == 1)
             paintADSR(g, w, h, dim, mid, bright);
-        else
+        else if (mScaleIdx == 2)
             paintVCF(g, w, h, dim, mid, bright);
+        else
+            paintAbout(g, w, h, dim, mid, bright);
     }
 
     void mouseDown(const juce::MouseEvent&) override
     {
-        mScaleIdx = (mScaleIdx + 1) % 3; // 0: waveform, 1: ADSR, 2: VCF
+        mScaleIdx = (mScaleIdx + 1) % 4; // 0: waveform, 1: ADSR, 2: VCF, 3: about
         repaint();
     }
 
@@ -66,8 +68,8 @@ public:
                          % KR106AudioProcessor::kScopeRingSize;
         if (newSamples == 0)
         {
-            // ADSR/VCF modes depend on slider params, not audio — only repaint on change
-            if (mScaleIdx >= 1) repaintIfParamsChanged();
+            if (mScaleIdx == 3) repaint(); // animate about screen wiggle
+            else if (mScaleIdx >= 1) repaintIfParamsChanged();
             return;
         }
 
@@ -514,7 +516,104 @@ private:
         }
     }
 
-    int mScaleIdx = 0; // 0: waveform, 1: ADSR, 2: VCF
+    // ---- About / version display (vector stroke text) ----
+    void paintAbout(juce::Graphics& g, int w, int h,
+                    juce::Colour dim, juce::Colour mid, juce::Colour bright)
+    {
+        // Vector stroke font — straight lines only, 4×6 grid per glyph.
+        // {-1,-1} marks pen-up between strokes within one glyph.
+        struct P { int8_t x, y; };
+        static constexpr P PU {-1, -1};
+
+        static constexpr P cA[] = {{0,6},{0,0},{4,0},{4,6},PU,{0,3},{4,3}};
+        static constexpr P cE[] = {{4,0},{0,0},{0,6},{4,6},PU,{0,3},{3,3}};
+        static constexpr P cK[] = {{0,0},{0,6},PU,{4,0},{0,3},{4,6}};
+        static constexpr P cL[] = {{0,0},{0,6},{4,6}};
+        static constexpr P cM[] = {{0,6},{0,0},{2,3},{4,0},{4,6}};
+        static constexpr P cR[] = {{0,6},{0,0},{4,0},{4,3},{0,3},PU,{0,3},{4,6}};
+        static constexpr P cS[] = {{4,0},{0,0},{0,3},{4,3},{4,6},{0,6}};
+        static constexpr P cT[] = {{0,0},{4,0},PU,{2,0},{2,6}};
+        static constexpr P cU[] = {{0,0},{0,6},{4,6},{4,0}};
+        static constexpr P cV[] = {{0,0},{2,6},{4,0}};
+        static constexpr P c0[] = {{0,0},{4,0},{4,6},{0,6},{0,0}};
+        static constexpr P c1[] = {{1,1},{2,0},{2,6}};
+        static constexpr P c2[] = {{0,0},{4,0},{4,3},{0,3},{0,6},{4,6}};
+        static constexpr P c3[] = {{0,0},{4,0},{4,3},{1,3},PU,{4,3},{4,6},{0,6}};
+        static constexpr P c4[] = {{0,0},{0,3},{4,3},PU,{4,0},{4,6}};
+        static constexpr P c5[] = {{4,0},{0,0},{0,3},{4,3},{4,6},{0,6}};
+        static constexpr P c6[] = {{4,0},{0,0},{0,6},{4,6},{4,3},{0,3}};
+        static constexpr P c7[] = {{0,0},{4,0},{2,6}};
+        static constexpr P c8[] = {{0,0},{4,0},{4,6},{0,6},{0,0},PU,{0,3},{4,3}};
+        static constexpr P c9[] = {{0,6},{4,6},{4,0},{0,0},{0,3},{4,3}};
+        static constexpr P cDash[] = {{1,3},{3,3}};
+        static constexpr P cDot[]  = {{2,5},{2,6}};
+
+        struct Glyph { char ch; const P* pts; int n; };
+        static const Glyph glyphs[] = {
+            {'A',cA,7}, {'E',cE,7}, {'K',cK,6}, {'L',cL,3}, {'M',cM,5},
+            {'R',cR,8}, {'S',cS,6}, {'T',cT,5}, {'U',cU,4}, {'V',cV,3},
+            {'0',c0,5}, {'1',c1,3}, {'2',c2,6}, {'3',c3,8}, {'4',c4,6},
+            {'5',c5,6}, {'6',c6,6}, {'7',c7,3}, {'8',c8,8}, {'9',c9,6},
+            {'-',cDash,2}, {'.',cDot,2},
+        };
+
+        // Draw a centered string of vector glyphs with per-character drift
+        float t = juce::Time::getMillisecondCounter() * 0.001f;
+        auto drawStr = [&](const char* str, float cx, float cy, float glyphH)
+        {
+            float glyphW = glyphH * (4.f / 6.f);
+            float space  = glyphW * 1.5f;
+            int len = static_cast<int>(strlen(str));
+            float x0 = cx - (len * space - (space - glyphW)) * 0.5f;
+
+            for (int i = 0; i < len; i++)
+            {
+                if (str[i] == ' ') continue;
+                const Glyph* gl = nullptr;
+                for (auto& gg : glyphs)
+                    if (gg.ch == str[i]) { gl = &gg; break; }
+                if (!gl) continue;
+
+                float ox = x0 + i * space;
+                float oy = cy;
+                float sx = glyphW / 4.f, sy = glyphH / 6.f;
+                for (int j = 1; j < gl->n; j++)
+                {
+                    if (gl->pts[j].x < 0 || gl->pts[j-1].x < 0) continue;
+                    g.drawLine(ox + gl->pts[j-1].x * sx, oy + gl->pts[j-1].y * sy,
+                               ox + gl->pts[j].x   * sx, oy + gl->pts[j].y   * sy,
+                               1.f);
+                }
+            }
+        };
+
+        // Faint grid
+        g.setColour(dim.withAlpha(0.3f));
+        g.fillRect(0.f, std::round(h * 0.5f), static_cast<float>(w), 1.f);
+        for (int i = 1; i <= 3; i++)
+        {
+            float x = std::round(static_cast<float>(i) / 4.f * (w - 1));
+            g.fillRect(x, 0.f, 1.f, static_cast<float>(h));
+        }
+
+        // Slow global drift
+        float gx = sinf(t * 0.7f) * 0.5f;
+        float gy = sinf(t * 0.5f) * 0.3f;
+        float cx = w * 0.5f + gx;
+
+        // Title
+        float titleH = h * 0.15f;
+        g.setColour(bright);
+        drawStr("ULTRAMASTER", cx, h * 0.15f + gy, titleH);
+        drawStr("KR-106", cx, h * 0.40f + gy, titleH);
+
+        // Version
+        g.setColour(mid);
+        juce::String ver = juce::String("V") + JucePlugin_VersionString;
+        drawStr(ver.toRawUTF8(), cx, h * 0.70f + gy, h * 0.10f);
+    }
+
+    int mScaleIdx = 0; // 0: waveform, 1: ADSR, 2: VCF, 3: about
 
     KR106AudioProcessor* mProcessor = nullptr;
 
