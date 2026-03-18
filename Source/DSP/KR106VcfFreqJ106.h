@@ -249,7 +249,18 @@ inline float dacToHz(uint16_t dac)
 {
   static constexpr float kBaseFreq = 5.53f;
   static constexpr float kScale = 0.693147f / 1143.f;
-  return kBaseFreq * expf(static_cast<float>(dac) * kScale);
+  float f = kBaseFreq * expf(static_cast<float>(dac) * kScale);
+
+  // IR3109 expo converter saturation: at high bias currents the
+  // transistor emitter resistance compresses the exponential,
+  // limiting the practical range to ~50 kHz (service manual spec).
+  // 4th-order soft saturation — identity below ~10 kHz, smooth
+  // rolloff above.  kSatHz tuned so max slider (DAC 0x3F80) → 50 kHz.
+  static constexpr float kSatHz = 50646.f;
+  float r = f * (1.f / kSatHz);
+  float r2 = r * r;
+  float r4 = r2 * r2;
+  return f / sqrtf(sqrtf(1.f + r4));
 }
 
 } // namespace kr106

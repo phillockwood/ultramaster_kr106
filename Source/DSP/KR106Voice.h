@@ -294,6 +294,9 @@ public:
     mPortaStep       = semiPerSec / (12.f * mSampleRate);
   }
 
+  // J106 DAC output RC filter: uPD7811G R/2R ladder → 10K/0.1µF lowpass (1ms tau)
+  static constexpr float kDacRcTau = 0.001f;
+
   // Precomputed sample-rate constants (defaults for 44100 Hz)
   float mInvNyq = 1.f / 22050.f;
   float mMinCPS = 20.f / 22050.f;
@@ -407,10 +410,7 @@ public:
     // Unified D7811G firmware tick rate (238.1 Hz) — drives ADSR + VCF
     mFwTickStep = ADSR::kTickRate / mSampleRate;
 
-    // DAC output smoothing: 1ms RC time constant models the analog
-    // output stage between the D7811G DAC and the IR3109 expo converter.
-    static constexpr float kDacSmoothTau = 0.00025f; // 0.25ms (99% converged by ~1.25ms)
-    mDacSmoothCoeff = 1.f - expf(-1.f / (kDacSmoothTau * mSampleRate));
+    mDacSmoothCoeff = 1.f - expf(-1.f / (kDacRcTau * mSampleRate));
 
     UpdatePortaCoeff();
   }
@@ -457,7 +457,7 @@ public:
       }
       else
       {
-        // J106: unified D7811G firmware tick drives ADSR + VCF DAC together.
+        // J106: unified firmware tick drives ADSR + VCF DAC together.
         float rawLfo = lfoRawBuffer ? static_cast<float>(lfoRawBuffer[i]) : 0.f;
         mFwTickAccum += mFwTickStep;
         while (mFwTickAccum >= 1.f)
@@ -465,7 +465,7 @@ public:
           mFwTickAccum -= 1.f;
           FirmwareTick(rawLfo);
         }
-        // RC smooth the stairstepped envelope (1ms tau, models analog output stage)
+        // RC smooth the stairstepped DAC output (1ms tau)
         mFwEnvSmooth += (mFwEnvNext - mFwEnvSmooth) * mDacSmoothCoeff;
         env = mFwEnvSmooth;
         mADSR.mEnv = env;
@@ -570,10 +570,15 @@ public:
         vcfCPS = vcfHz * mInvNyq;
       }
 
-      // Clamp to [20 Hz, 0.975 × Nyquist]
-      vcfCPS = std::clamp(vcfCPS, mMinCPS, 0.975f);
+      // Clamp to 20 Hz floor (no upper clamp — 2x oversampled TPT is stable to Nyquist)
+      vcfCPS = std::max(vcfCPS, mMinCPS);
 
-      float filtered = mVCF.Process(oscOut, vcfCPS, mVcfRes);
+      // Fade resonance near base-rate Nyquist: self-oscillation above
+      // ~18 kHz folds into the audible range during 2x→1x downsampling.
+      // Models IR3109 OTA transconductance rolloff near fT limits.
+      float res = mVcfRes * (1.f - std::clamp((vcfCPS - 0.8f) * 5.f, 0.f, 1.f));
+
+      float filtered = mVCF.Process(oscOut, vcfCPS, res);
 
       float signal = filtered;
 

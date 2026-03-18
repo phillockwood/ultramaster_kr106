@@ -89,19 +89,30 @@ struct ADSR
   static constexpr uint16_t kEnvMax       = 0x3FFF;  // 14-bit envelope maximum
 
   // Attack increment from slider position (0..1).
-  // Attempt to reproduce the timing curve of the D7811G ROM attack table
-  // (0B60_envAtkTbl) without including copyrighted ROM data.
-  // Range: ~1.5ms at slider 0 to ~3.3s at slider 1.
-  // The first half (idx 0-63) follows a harmonic series: inc = 8192/idx,
-  // giving ticks linear in slider. The second half accelerates.
-  // Formula fitted to within 11% of all 128 ROM entries.
+  // Cleanroom piecewise approximation of the D7811G ROM attack table
+  // (0B60_envAtkTbl), derived from curve-shape analysis of the ROM's
+  // timing behaviour. Five regions:
+  //   idx 0:       instant (kEnvMax)
+  //   idx 1-63:    harmonic series  8192 / idx
+  //   idx 64-86:   linear ramp,  slope ~ -11/4 per idx
+  //   idx 87-107:  linear ramp,  slope ~ -3/2 per idx
+  //   idx 108-121: linear ramp,  slope ~ -1/2 per idx
+  //   idx 122-127: linear ramp,  slope -1 per idx
+  // 123/128 exact matches; 5 entries off by ±1 (max 1.1%).
   static uint16_t AttackIncFromSlider(float slider)
   {
     float s = std::clamp(slider, 0.f, 1.f);
-    if (s < 0.001f) return kEnvMax; // instant attack (~1.5ms)
-    float ticks = 268.66f * s * expf(-0.8914f * s + 1.9573f * s * s);
-    uint16_t inc = static_cast<uint16_t>(static_cast<float>(kEnvMax) / ticks + 0.5f);
-    return std::max(inc, static_cast<uint16_t>(1));
+    if (s < 0.003937f) return kEnvMax;
+    if (s <= 0.500000f)
+        return static_cast<uint16_t>(8192.f / (s * 127.f) + 0.5f);
+    if (s <= 0.681102f)
+        return static_cast<uint16_t>(305.03f - 352.26f * s + 0.5f);
+    if (s <= 0.846457f)
+        return static_cast<uint16_t>(194.74f - 190.50f * s + 0.5f);
+    if (s <= 0.956693f)
+        return static_cast<uint16_t>(86.37f - 62.52f * s + 0.5f);
+    return static_cast<uint16_t>(std::max(
+        static_cast<int>(148.f - 127.f * s + 0.5f), 1));
   }
 
   // ROM-accurate fixed-point multiply matching D7811G calcDecay at $083D.
@@ -198,12 +209,12 @@ struct ADSR
 
   // --- Display helpers (slider 0–1 → ms, for tooltips and scope) ---
 
-  // Attack: ticks for linear ramp to reach peak
+  // Attack: 1ms RC settling + (ticks - 1) × tick period
   static float AttackMs(float slider)
   {
     uint16_t inc = AttackIncFromSlider(slider);
     int ticks = (kEnvMax + inc - 1) / inc;
-    return std::max(1.5f, ticks / kTickRate * 1000.f);
+    return 1.f + (ticks - 1) * (1000.f / kTickRate);
   }
 
   // Decay/Release: simulate integer decay from max to -20dB (10%), return time in ms.

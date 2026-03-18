@@ -66,8 +66,8 @@ public:
                          % KR106AudioProcessor::kScopeRingSize;
         if (newSamples == 0)
         {
-            // ADSR/VCF modes read slider params directly — repaint even with no audio
-            if (mScaleIdx >= 3) repaint();
+            // ADSR/VCF modes depend on slider params, not audio — only repaint on change
+            if (mScaleIdx >= 3) repaintIfParamsChanged();
             return;
         }
 
@@ -532,4 +532,37 @@ private:
     float mDisplayR[RING_SIZE] = {};
     int mDisplayLen = 0;
     bool mHasData = false;
+
+    // Cached param snapshot for ADSR/VCF modes — only repaint when values change
+    uint64_t mParamHash = 0;
+
+    void repaintIfParamsChanged()
+    {
+        if (!mProcessor) return;
+        auto& dsp = mProcessor->mDSP;
+
+        // Pack relevant floats into a simple hash via bit representation
+        auto fbits = [](float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; };
+
+        uint64_t h = 0;
+        if (mScaleIdx == 3) // ADSR
+        {
+            h = fbits(dsp.mSliderA) ^ (static_cast<uint64_t>(fbits(dsp.mSliderD)) << 16)
+              ^ (static_cast<uint64_t>(fbits(dsp.mSliderR)) << 32)
+              ^ (static_cast<uint64_t>(fbits(mProcessor->getParam(kEnvS)->getValue())) << 8)
+              ^ static_cast<uint64_t>(dsp.mAdsrMode);
+        }
+        else // VCF
+        {
+            h = fbits(dsp.mSliderVcfFreq)
+              ^ (static_cast<uint64_t>(fbits(mProcessor->getParam(kVcfRes)->getValue())) << 32)
+              ^ static_cast<uint64_t>(dsp.mAdsrMode);
+        }
+
+        if (h != mParamHash)
+        {
+            mParamHash = h;
+            repaint();
+        }
+    }
 };

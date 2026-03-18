@@ -91,9 +91,8 @@ KR106AudioProcessor::KR106AudioProcessor()
       hz = kr106::j6_vcf_freq_from_slider(v);
     else
       hz = kr106::dacToHz(static_cast<uint16_t>(v * 0x3F80));
-    hz = std::min(hz, mDSP.mSampleRate * 0.475f); // clamp at 0.975 × Nyquist
     if (hz >= 1000.f) return juce::String(hz / 1000.f, 1) + " kHz";
-    return juce::String(juce::roundToInt(hz)) + " Hz";
+    return juce::String(static_cast<int>(hz)) + " Hz";
   };
   VFS parseVcfHz = [this, bsearch, parseHz](const juce::String& text) -> float {
     float hz = juce::jlimit(1.f, 20000.f, parseHz(text));
