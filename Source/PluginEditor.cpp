@@ -157,6 +157,30 @@ void KR106Editor::paint(juce::Graphics& g)
 
 void KR106Editor::timerCallback()
 {
+    bool active = mProcessor.getParam(kPower)->getValue() > 0.5f
+                  && !mProcessor.isSuspended();
+
+    // When inactive (power off or host suspended), skip GUI updates to save CPU
+    if (!active)
+    {
+        if (mWasActive)
+        {
+            // One final repaint so LEDs go dark, scope goes black, keys release
+            mWasActive = false;
+            for (auto* ctrl : mControls)
+                ctrl->repaint();
+            startTimerHz(4); // Drop to 4 Hz — just polling for reactivation
+        }
+        return;
+    }
+
+    // Just became active — restore full refresh rate
+    if (!mWasActive)
+    {
+        mWasActive = true;
+        startTimerHz(30);
+    }
+
     // Restore transpose chevron after state restore
     if (mNeedChevronRestore)
     {
@@ -174,7 +198,14 @@ void KR106Editor::timerCallback()
     mScope->updateFromProcessor();
     mKeyboard->updateFromProcessor();
 
-    // Repaint all controls to sync with host automation
-    for (auto* ctrl : mControls)
-        ctrl->repaint();
+    // Repaint knobs/sliders/switches at ~7.5 Hz (every 4th tick) for host
+    // automation sync — they don't change during normal MIDI playback.
+    // Scope and keyboard repaint themselves from updateFromProcessor() above.
+    if (++mRepaintDivider >= 4)
+    {
+        mRepaintDivider = 0;
+        for (auto* ctrl : mControls)
+            if (ctrl != mScope && ctrl != mKeyboard)
+                ctrl->repaint();
+    }
 }

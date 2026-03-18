@@ -31,4 +31,6 @@ private:
     KR106Tooltip mTooltip;
 
     bool mNeedChevronRestore = true;
+    bool mWasActive = true;
+    int mRepaintDivider = 0;
 };

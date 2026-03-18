@@ -17,9 +17,9 @@
 
 namespace kr106 {
 
-static constexpr float kSawAmp = 0.5f;
-static constexpr float kPulseAmp = 0.5f;
-static constexpr float kSubAmp = 0.67f;
+static constexpr float kSawAmp = 0.5f; // SAW is 0v to 12v
+static constexpr float kPulseAmp = 0.5f; // PULSE is 0v to +12v TL074
+static constexpr float kSubAmp = 0.625f; // SUB is 0v to +15v CMOS
 static constexpr float kSwitchRamp = 1.f / 64.f; // ~1.5ms at 44.1k
 
 // 2nd-order polyBLEP residual — smooths a discontinuity of height 1.
@@ -46,7 +46,37 @@ struct Oscillators {
   float mBlipEnv = 0.f;      // capacitor discharge transient envelope
   float mSubLPState = 0.f;   // sub oscillator passive LP state
   float mNoiseLPState = 0.f; // noise spectral tilt LP state
-  bool mPulseInvert = false; // J106: pulse is positive-first (80017A vs J6's uPD4007)
+
+  // Pulse duty cycle: J6 vs J106
+  //
+  // Both circuits generate the pulse by comparing the saw ramp against a PWM CV
+  // threshold. The pulse is LOW while the saw is on one side of the threshold,
+  // HIGH on the other. Both produce 50%–97% duty (always ≥50% HIGH).
+  //
+  // J6:  Saw falls 0V → −12V. Comparator has saw on (−), PWM on (+).
+  //      Output is LOW while saw > threshold (start of ramp near 0V),
+  //      flips HIGH when saw falls below threshold.
+  //      → The narrow LOW portion is at the START of the falling ramp.
+  //
+  // J106: Saw rises ~0V → +V. Comparator (TL074-B) has saw on (+), PWM on (−).
+  //       Output is HIGH while saw > threshold (end of ramp near peak),
+  //       LOW while saw < threshold (start of ramp near 0V).
+  //       → The narrow LOW portion is at the END of the rising ramp.
+  //
+  // The saw direction is inverted (falling vs rising) and the comparator inputs
+  // are swapped ((−)/(+) vs (+)/(−)), but these two inversions do NOT cancel.
+  // They cancel for the polarity of the output (both start LOW, go HIGH), but
+  // the narrow LOW dip sits at opposite ends of the ramp:
+  //
+  //   J6:  |_|‾‾‾‾‾‾‾|  narrow at start, where saw begins falling from 0V
+  //   J106: |‾‾‾‾‾‾‾|_|  narrow at end, where saw approaches peak before reset
+  //
+  // When saw + pulse are mixed, the pulse notch coincides with the saw reset
+  // edge on the J6, but with the saw peak on the J106 — a timbral difference.
+  //
+  // In code, the J106 model inverts the effective pulse width: effPW = 1 - effPW.
+  // All other oscillator math (saw shape, sub, noise) is identical between models.
+  bool mPulseInvert = false; 
 
   // Ramp curvature: pos*(1+k*(1-pos)) bows the ramp slightly.
   //
@@ -106,7 +136,7 @@ struct Oscillators {
     // --- Saw: curved ramp + polyBLEP + reset blip ---
     float curvedPos = mPos * (1.f + kSawCurve * (1.f - mPos));
     float saw = 2.f * curvedPos - 1.f;
-    saw += PolyBLEP(mPos, cps); // step at reset is still 2.0
+    saw += PolyBLEP(mPos, cps); // step at reset is 2.0
 
     mBlipEnv *= kBlipDecay;
     saw -= mBlipEnv * kBlipAmp;
@@ -116,6 +146,7 @@ struct Oscillators {
     // the PW threshold crossing shifts with curvature. Invert the
     // quadratic to find the linear phase of the crossing for polyBLEP.
     float effPW = pulseWidth / (1.f + kSawCurve * (1.f - pulseWidth));
+    if (mPulseInvert) effPW = 1.f - effPW; // J106: inverted duty cycle
     effPW = std::clamp(effPW, cps, 1.f - cps);
     float pulse = (mPos < effPW) ? -1.f : 1.f;
     pulse -= PolyBLEP(mPos, cps);   // falling edge at reset
@@ -123,14 +154,13 @@ struct Oscillators {
     if (pw2 < 0.f)
       pw2 += 1.f;
     pulse += PolyBLEP(pw2, cps);    // rising edge at PW crossing
-    if (mPulseInvert) pulse = -pulse; // J106: 80017A outputs positive-first pulse
 
     // --- Sub: CD4013 flip-flop + polyBLEP ---
     // Half-frequency square wave, phase-locked to saw reset.
     // Measured harmonics match ideal 1/n — no audible filtering in-band.
-    float sub = mSubState ? 1.f : -1.f;
+    float sub = mSubState ? -1.f : 1.f;
     if (sync)
-      sub += PolyBLEP(mPos, cps) * (mSubState ? 1.f : -1.f);
+      sub += PolyBLEP(mPos, cps) * (mSubState ? -1.f : 1.f);
 
     // --- Oscillator mixing ---
     // Pop-free crossfade when waveform switches change mid-note.
@@ -144,8 +174,11 @@ struct Oscillators {
     // (6-10dB below predicted) are phase cancellation from the shared
     // phase accumulator, not mixer saturation. The VCF input OTA
     // provides soft clipping downstream when driven harder.
+    // 50K Audio taper pot emulation (same curve as noise fader)
+    float subAT = (std::exp(3.f * subLevel) - 1.f) / (std::exp(3.f) - 1.f);
+
     float out = saw * kSawAmp * mSawGain + pulse * kPulseAmp * mPulseGain +
-                sub * kSubAmp * subLevel * mSubGain;
+                sub * kSubAmp * subAT * mSubGain;
 
     // --- Noise: 2SC945 NZ avalanche source ---
     if (noiseAmp > 0.f) {

@@ -233,7 +233,7 @@ KR106AudioProcessor::KR106AudioProcessor()
   addSwitch(kHpfFreq,    "HPF",         1, 0, 3, fmtHpf);
 
   // VCF
-  addSlider(kVcfFreq,    "VCF Freq",    0.5f, 0.f, 1.f, fmtVcfHz, parseVcfHz);
+  addSlider(kVcfFreq,    "VCF Freq",    1.f,  0.f, 1.f, fmtVcfHz, parseVcfHz);
   addSlider(kVcfRes,     "VCF Res",     0.f,  0.f, 1.f, fmtPct, parsePct);
   addSlider(kVcfEnv,     "VCF Env",     0.f,  0.f, 1.f, fmtPct, parsePct);
   SFV fmtVcfLfo = [this](float v, int) -> juce::String {
@@ -265,11 +265,11 @@ KR106AudioProcessor::KR106AudioProcessor()
   addBool(kTranspose,    "Transpose",   false);
   addBool(kHold,         "Hold",        false);
   addBool(kArpeggio,     "Arpeggio",    false);
-  addBool(kDcoPulse,     "Pulse",       true);
+  addBool(kDcoPulse,     "Pulse",       false);
   addBool(kDcoSaw,       "Saw",         true);
   addBool(kDcoSubSw,     "Sub Sw",      false);
-  addBool(kChorusOff,    "Chorus Off",  true);
-  addBool(kChorusI,      "Chorus I",    false);
+  addBool(kChorusOff,    "Chorus Off",  false);
+  addBool(kChorusI,      "Chorus I",    true);
   addBool(kChorusII,     "Chorus II",   false);
 
   // Switches
@@ -279,7 +279,7 @@ KR106AudioProcessor::KR106AudioProcessor()
   addSwitch(kLfoMode,      "LFO Mode",    0, 0, 1);
   addSwitch(kPwmMode,      "PWM Mode",    1, 0, 2);
   addSwitch(kVcfEnvInv,    "VCF Env Inv", 0, 0, 1);
-  addSwitch(kVcaMode,      "VCA Mode",    0, 0, 1);
+  addSwitch(kVcaMode,      "VCA Mode",    1, 0, 1);
   addSwitch(kAdsrMode,     "ADSR Mode",   1, 0, 1);
 
   // Special controls

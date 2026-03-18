@@ -97,6 +97,7 @@ struct VCF
   bool mOTASaturation = false;   // per-stage OTA tanh nonlinearity (IR3109 model), marginal audio quality at the expense of lots of pitch tracking error
   bool mJ106Res = false;         // true = J106 resonance curve, false = J6 (calibrated)
   uint32_t mNoiseSeed = 123456789u; // thermal noise PRNG state
+  float mInputEnv = 0.f;           // peak envelope follower for noise suppression
 
   // 2x oversampling: polyphase filters for anti-imaging/aliasing
   Upsampler2x mUpsampler;
@@ -245,8 +246,10 @@ private:
     // still providing reliable oscillation seeding.
     mNoiseSeed = mNoiseSeed * 196314165u + 907633515u;
     float white = static_cast<float>(mNoiseSeed) / static_cast<float>(0xFFFFFFFFu) * 2.f - 1.f;
+    mInputEnv = std::max(fabsf(input), mInputEnv * 0.999f); // peak follower with ~22ms decay at 2x rate
     float stateEnergy = fabsf(mS[0]) + fabsf(mS[1]) + fabsf(mS[2]) + fabsf(mS[3]);
-    float noiseLevel = 1e-3f / (1.f + stateEnergy * 1000.f);
+    float energy = std::max(mInputEnv, stateEnergy);
+    float noiseLevel = 1e-3f / (1.f + energy * 1000.f);
     input += white * noiseLevel;
 
     // Precompute gains for the 4-pole cascade solution

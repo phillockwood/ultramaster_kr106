@@ -309,6 +309,8 @@ public:
     {
       mOsc.Reset();
       mVCF.Reset();
+      mScopeSyncPhase = 0.f;
+      mScopeSyncSub = false;
       // Seed filter state for instant self-oscillation startup.
       // On real hardware the filter is always processing (even when VCA
       // is closed), so self-oscillation is already at full amplitude when
