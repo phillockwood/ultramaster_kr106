@@ -106,6 +106,43 @@ public:
         dismiss();
     }
 
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        int num = mProcessor ? mProcessor->getNumPrograms() : 0;
+        int maxIdx = std::min(num, kCols * kRows) - 1;
+        if (maxIdx < 0) return false;
+
+        // Initialize nav index from current preset if not yet navigating
+        if (mHoverIndex < 0)
+            mHoverIndex = mProcessor->getCurrentProgram();
+
+        int col = mHoverIndex % kCols;
+        int row = mHoverIndex / kCols;
+
+        if (key == juce::KeyPress::leftKey)
+            col = (col - 1 + kCols) % kCols;
+        else if (key == juce::KeyPress::rightKey)
+            col = (col + 1) % kCols;
+        else if (key == juce::KeyPress::upKey)
+            row = (row - 1 + kRows) % kRows;
+        else if (key == juce::KeyPress::downKey)
+            row = (row + 1) % kRows;
+        else if (key == juce::KeyPress::returnKey)
+        {
+            mProcessor->setCurrentProgram(mHoverIndex);
+            dismiss();
+            return true;
+        }
+        else
+            return false;
+
+        int newIdx = row * kCols + col;
+        if (newIdx > maxIdx) newIdx = maxIdx;
+        mHoverIndex = newIdx;
+        repaint();
+        return true;
+    }
+
 private:
     int hitTest(juce::Point<int> pos) const
     {
@@ -258,7 +295,8 @@ private:
         items.push_back(KR106MenuItem::item(7, "Show in Files"));
       #endif
 
-        auto* editor = getTopLevelComponent();
+        juce::Component* editor = findParentComponentOfClass<juce::AudioProcessorEditor>();
+        if (!editor) editor = getTopLevelComponent();
         if (!editor) return;
 
         juce::Component::SafePointer<KR106PresetDisplay> safeThis(this);

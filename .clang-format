@@ -2,18 +2,25 @@ BasedOnStyle: LLVM
 IndentWidth: 2
 ColumnLimit: 100
 
-# Braces on their own line for structs, classes, functions, enums
-BreakBeforeBraces: Allman
-# Short one-liner methods stay on one line
-AllowShortFunctionsOnASingleLine: InlineOnly
-AllowShortIfStatementsOnASingleLine: Never
+# K&R braces for structs/classes, Allman for functions and control flow
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: false
+  AfterStruct: false
+  AfterEnum: false
+  AfterNamespace: false
+  AfterFunction: true
+  AfterControlStatement: Always
+# Short one-liner methods and ifs stay on one line
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
 AllowShortLoopsOnASingleLine: false
 
 # Switch/case indentation
 IndentCaseLabels: true
 
 # Alignment
-AlignConsecutiveAssignments: true
+AlignConsecutiveAssignments: false
 AlignTrailingComments: true
 
 # Preserve blank lines between logical sections

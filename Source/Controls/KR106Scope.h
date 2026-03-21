@@ -18,6 +18,48 @@ class KR106Scope : public juce::Component
 public:
     static constexpr int RING_SIZE = 4096;
 
+    // Shared scope drawing constants
+    static constexpr float kTickW = 1.f;
+    static constexpr float kTickH = 3.f;
+    static constexpr float kGridW = 1.f;
+    static constexpr int   kTickSpacing = 5;
+    static inline juce::Colour cBlack()  { return juce::Colour(0, 0, 0); }
+    static inline juce::Colour cDim()    { return juce::Colour(0, 128, 0); }
+    static inline juce::Colour cMid()    { return juce::Colour(0, 192, 0); }
+    static inline juce::Colour cBright() { return juce::Colour(0, 255, 0); }
+
+    // Center crosshairs with tick marks every kTickSpacing px
+    void paintCrosshairs(juce::Graphics& g, int w, int h, juce::Colour dim)
+    {
+        float cx = std::round(w * 0.5f);
+        float cy = std::round(h * 0.5f);
+
+        // Center lines
+        g.setColour(dim);
+        g.fillRect(cx, 0.f, kGridW, static_cast<float>(h));
+        g.fillRect(0.f, cy, static_cast<float>(w), kGridW);
+
+        // Ticks on horizontal center line (radiating from center, shifted 1px down)
+        for (int i = kTickSpacing; ; i += kTickSpacing)
+        {
+            float xr = cx + i, xl = cx - i;
+            bool any = false;
+            if (xr < w) { g.fillRect(xr, cy - kTickH * 0.5f + 0.5f, kTickW, kTickH); any = true; }
+            if (xl >= 0) { g.fillRect(xl, cy - kTickH * 0.5f + 0.5f, kTickW, kTickH); any = true; }
+            if (!any) break;
+        }
+
+        // Ticks on vertical center line (radiating from center, shifted 1px right)
+        for (int i = kTickSpacing; ; i += kTickSpacing)
+        {
+            float yd = cy + i, yu = cy - i;
+            bool any = false;
+            if (yd < h) { g.fillRect(cx - kTickH * 0.5f + 0.5f, yd, kTickH, kTickW); any = true; }
+            if (yu >= 0) { g.fillRect(cx - kTickH * 0.5f + 0.5f, yu, kTickH, kTickW); any = true; }
+            if (!any) break;
+        }
+    }
+
     KR106Scope(KR106AudioProcessor* processor) : mProcessor(processor)
     {
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
@@ -28,16 +70,11 @@ public:
         int w = getWidth();
         int h = getHeight();
 
-        const auto black  = juce::Colour(0, 0, 0);
-        const auto dim    = juce::Colour(0, 128, 0);
-        const auto mid    = juce::Colour(0, 192, 0);
-        const auto bright = juce::Colour(0, 255, 0);
+        auto black = cBlack(), dim = cDim(), mid = cMid(), bright = cBright();
 
-        // Black background
         g.setColour(black);
         g.fillRect(0, 0, w, h);
 
-        // Check power
         if (mProcessor && mProcessor->getParam(kPower)->getValue() <= 0.5f)
             return;
 
@@ -51,10 +88,12 @@ public:
         }
     }
 
-    void mouseDown(const juce::MouseEvent&) override
+    void mouseDown(const juce::MouseEvent&) override { cycleMode(1); }
+
+    void cycleMode(int delta)
     {
-        mAboutActive = false; // reset beam animation on any click
-        mScaleIdx = (mScaleIdx + 1) % 5; // 0: waveform, 1: spectrum, 2: ADSR, 3: VCF, 4: about
+        mAboutActive = false;
+        mScaleIdx = ((mScaleIdx + delta) % 5 + 5) % 5;
         repaint();
     }
 
@@ -148,22 +187,7 @@ private:
         int v2 = h / 2;
         float scale = 1.f;
 
-        // Vertical: 3 interior lines (skip edges)
-        g.setColour(dim);
-        for (int i = 1; i <= 3; i++)
-        {
-            float x = std::round(static_cast<float>(i) / 4.f * (w - 1));
-            g.fillRect(x, 0.f, 1.f, static_cast<float>(h));
-        }
-
-        // Horizontal: one line per 0.5 amplitude units (skip edge lines)
-        int numSteps = static_cast<int>(scale / 0.5f);
-        for (int i = -numSteps + 1; i <= numSteps - 1; i++)
-        {
-            float y = std::round((i * 0.5f / scale) * -v2 + v2);
-            g.setColour(i == 0 ? mid : dim);
-            g.fillRect(0.f, y, static_cast<float>(w), 1.f);
-        }
+        paintCrosshairs(g, w, h, dim);
 
         // Waveform -- one full period interpolated to fill the display width
         if (mHasData && mDisplayLen > 1)
@@ -260,26 +284,35 @@ private:
         float logMax = log10f(nyquist);
         float logRange = logMax - logMin;
 
-        // Grid: vertical lines at decades
+        // Grid: vertical lines at decades + log tick marks at bottom
         g.setColour(dim);
-        for (float freq : { 100.f, 1000.f, 10000.f })
+        for (int decade = 1; decade <= 4; decade++)
         {
-            float xf = (log10f(freq) - logMin) / logRange * (w - 1);
-            if (xf > 0 && xf < w)
-                g.fillRect(xf, 0.f, 1.f, static_cast<float>(h));
+            for (int m = 1; m <= 9; m++)
+            {
+                float freq = m * powf(10.f, static_cast<float>(decade));
+                if (freq < 20.f || freq > nyquist) continue;
+                float xf = (log10f(freq) - logMin) / logRange * (w - 1);
+                if (xf < 0 || xf >= w) continue;
+                if (m == 1)
+                    g.fillRect(xf, 0.f, 1.f, static_cast<float>(h)); // full line at decades
+                else
+                    g.fillRect(xf, static_cast<float>(h) - kTickH, kTickW, kTickH); // tick mark
+            }
         }
 
-        // Grid: horizontal lines every 18 dB
-        for (float db = kMinDb + 18.f; db < kMaxDb; db += 18.f)
+        // Grid: horizontal lines every 18 dB (from 0dB downward)
+        for (float db = 0.f; db > kMinDb; db -= 18.f)
         {
+            if (db > kMaxDb) continue;
             float yf = (1.f - (db - kMinDb) / kDbRange) * (h - 1);
-            g.setColour(db == -18.f ? mid : dim);
+            g.setColour(db == 0.f ? mid : dim);
             g.fillRect(0.f, std::round(yf), static_cast<float>(w), 1.f);
         }
 
         if (available < 64) return; // not enough data
 
-        // Draw spectrum: map each pixel to a log-frequency bin
+        // Draw spectrum as connected line
         auto specY = [&](int px) -> int {
             float logF = logMin + static_cast<float>(px) / (w - 1) * logRange;
             float freq = powf(10.f, logF);
@@ -293,9 +326,11 @@ private:
 
         g.setColour(bright);
         int lastY = specY(0);
+        int floor = h - 1;
         for (int px = 0; px < w; px++)
         {
             int y = specY(px);
+            if (y >= floor && lastY >= floor) { lastY = y; continue; }
             int y1 = std::min(lastY, y);
             int y2 = std::max(lastY, y) + 1;
             g.fillRect(static_cast<float>(px), static_cast<float>(y1),
@@ -559,12 +594,21 @@ private:
         float logMax = log10f(kMaxHz);
         float logRange = logMax - logMin;
 
-        // Grid: vertical lines at decade frequencies
+        // Grid: vertical lines at decades + log tick marks at bottom
         g.setColour(dim);
-        for (float freq : { 10.f, 100.f, 1000.f, 10000.f })
+        for (int decade = 0; decade <= 4; decade++)
         {
-            float xf = (log10f(freq) - logMin) / logRange * (w - 1);
-            g.fillRect(xf, 0.f, 1.f, static_cast<float>(h));
+            for (int m = 1; m <= 9; m++)
+            {
+                float freq = m * powf(10.f, static_cast<float>(decade));
+                if (freq < kMinHz || freq > kMaxHz) continue;
+                float xf = (log10f(freq) - logMin) / logRange * (w - 1);
+                if (xf < 0 || xf >= w) continue;
+                if (m == 1)
+                    g.fillRect(xf, 0.f, 1.f, static_cast<float>(h));
+                else
+                    g.fillRect(xf, static_cast<float>(h) - kTickH, kTickW, kTickH);
+            }
         }
 
         // Grid: horizontal lines every 12 dB
@@ -617,6 +661,96 @@ private:
                        1.f, static_cast<float>(y2 - y1));
             lastY = y;
         }
+    }
+
+    // ---- Frequency counter (zero-crossing measurement) ----
+    void paintFreqCounter(juce::Graphics& g, int w, int h,
+                          juce::Colour dim, juce::Colour /*mid*/, juce::Colour bright)
+    {
+        if (!mProcessor || mSamplesAvail < 2) return;
+
+        float sr = static_cast<float>(mProcessor->getSampleRate());
+        if (sr <= 0.f) return;
+
+        // Scan for positive-going zero crossings.
+        // Accumulate total elapsed samples and cycle count over a measurement
+        // window, then compute frequency from the aggregate.
+        for (int i = 1; i < mSamplesAvail; i++)
+        {
+            int idx0 = (mRingWritePos - mSamplesAvail + i - 1 + RING_SIZE) % RING_SIZE;
+            int idx1 = (idx0 + 1) % RING_SIZE;
+            float s0 = mRing[idx0];
+            float s1 = mRing[idx1];
+
+            mFreqWindowSamples++;
+
+            if (s0 <= 0.f && s1 > 0.f)
+            {
+                float frac = -s0 / (s1 - s0);
+
+                if (mHadPriorCross)
+                {
+                    mFreqCycles++;
+                    if (mFreqCycles == 1)
+                        mFreqWindowStart = mFreqWindowSamples - 1.f + frac;
+                    mFreqWindowEnd = mFreqWindowSamples - 1.f + frac;
+                }
+
+                mHadPriorCross = true;
+            }
+        }
+
+        // Update frequency estimate when we have enough cycles
+        if (mFreqCycles >= kFreqMinCycles && mFreqWindowEnd > mFreqWindowStart)
+        {
+            float totalSamples = mFreqWindowEnd - mFreqWindowStart;
+            mFreqSmooth = sr * mFreqCycles / totalSamples;
+            mFreqCycles = 0;
+            mFreqWindowSamples = 0;
+            mFreqWindowStart = 0.f;
+            mFreqWindowEnd = 0.f;
+        }
+        // Reset if window gets too long without enough crossings (silence)
+        else if (mFreqWindowSamples > sr)
+        {
+            mFreqSmooth = 0.f;
+            mFreqCycles = 0;
+            mFreqWindowSamples = 0;
+            mFreqWindowStart = 0.f;
+            mFreqWindowEnd = 0.f;
+            mHadPriorCross = false;
+        }
+
+        // Format display
+        juce::String line1, line2;
+        if (mFreqSmooth > 1.f)
+        {
+            line1 = juce::String(mFreqSmooth, 1) + " Hz";
+
+            // MIDI note + cents
+            float midiNote = 69.f + 12.f * log2f(mFreqSmooth / 440.f);
+            int noteInt = juce::roundToInt(midiNote);
+            float cents = (midiNote - noteInt) * 100.f;
+            static const char* noteNames[] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+            int noteName = ((noteInt % 12) + 12) % 12;
+            int octave = (noteInt / 12) - 1;
+            char centsStr[16];
+            snprintf(centsStr, sizeof(centsStr), "%+.0f", cents);
+            line2 = juce::String(noteNames[noteName]) + juce::String(octave) + " " + juce::String(centsStr) + "c";
+        }
+        else
+        {
+            line1 = "---";
+            line2 = "";
+        }
+
+        // Draw centered text
+        auto font = juce::Font(juce::FontOptions()
+            .withMetricsKind(juce::TypefaceMetricsKind::legacy)).withHeight(10.f);
+        g.setFont(font);
+        g.setColour(bright);
+        g.drawText(line1, 0, h / 2 - 14, w, 14, juce::Justification::centred);
+        g.drawText(line2, 0, h / 2 + 2, w, 14, juce::Justification::centred);
     }
 
     // ---- Build rasterized path for about screen (done once per resize) ----
@@ -722,14 +856,7 @@ private:
     {
         buildAboutPath(w, h);
 
-        // Faint grid
-        g.setColour(dim.withAlpha(0.3f));
-        g.fillRect(0.f, std::round(h * 0.5f), static_cast<float>(w), 1.f);
-        for (int i = 1; i <= 3; i++)
-        {
-            float x = std::round(static_cast<float>(i) / 4.f * (w - 1));
-            g.fillRect(x, 0.f, 1.f, static_cast<float>(h));
-        }
+        paintCrosshairs(g, w, h, dim);
 
         int totalPx = static_cast<int>(mAboutPath.size());
         if (totalPx == 0) return;
@@ -799,6 +926,15 @@ private:
     int mAboutW = 0, mAboutH = 0;
     float mAboutStartTime = 0.f;
     bool mAboutActive = false;
+
+    // Frequency counter state — accumulates cycles over a window
+    static constexpr int kFreqMinCycles = 16;
+    float mFreqSmooth = 0.f;
+    int mFreqCycles = 0;
+    int mFreqWindowSamples = 0;
+    float mFreqWindowStart = 0.f;
+    float mFreqWindowEnd = 0.f;
+    bool mHadPriorCross = false;
 
     // Cached param snapshot for ADSR/VCF modes — only repaint when values change
     uint64_t mParamHash = 0;

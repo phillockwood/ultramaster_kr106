@@ -254,13 +254,14 @@ inline float dacToHz(uint16_t dac)
   // IR3109 expo converter saturation: at high bias currents the
   // transistor emitter resistance compresses the exponential,
   // limiting the practical range to ~50 kHz (service manual spec).
-  // 4th-order soft saturation — identity below ~10 kHz, smooth
-  // rolloff above.  kSatHz tuned so max slider (DAC 0x3F80) → 50 kHz.
-  static constexpr float kSatHz = 50646.f;
-  float r = f * (1.f / kSatHz);
-  float r2 = r * r;
-  float r4 = r2 * r2;
-  return f / sqrtf(sqrtf(1.f + r4));
+  // Below 20 kHz: pure exponential (identity).
+  // Above 20 kHz: tanh compression to 50 kHz ceiling.
+  // C1 continuous (slope = 1 at threshold) for smooth sweeps.
+  static constexpr float kThresh = 20000.f;
+  static constexpr float kCeil   = 50000.f;
+  static constexpr float kRange  = kCeil - kThresh;
+  if (f <= kThresh) return f;
+  return kThresh + kRange * tanhf((f - kThresh) / kRange);
 }
 
 } // namespace kr106

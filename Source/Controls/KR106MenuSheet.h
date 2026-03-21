@@ -116,7 +116,9 @@ public:
         {
             if (item.separator) continue;
             juce::String label = ticked ? ("* " + item.text) : item.text;
-            int w = (int)std::ceil(font.getStringWidthFloat(label));
+            juce::GlyphArrangement glyphs;
+            glyphs.addLineOfText(font, label, 0.f, 0.f);
+            int w = (int)std::ceil(glyphs.getBoundingBox(0, -1, false).getWidth());
             maxW = juce::jmax(maxW, w);
         }
         return maxW + kPadX * 2;

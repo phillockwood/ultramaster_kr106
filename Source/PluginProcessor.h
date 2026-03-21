@@ -65,6 +65,7 @@ public:
   int mVoiceCount = 6;   // persisted per instance (6/8/10)
   bool mIgnoreVelocity = true; // persisted per instance
   bool mArpLimitKbd = true;    // persisted per instance
+  int mVcfOversample = 4;      // persisted per instance (2 or 4)
   bool mInitialDefault = true; // shows "Default" until first preset change
 
   // Preset CSV operations

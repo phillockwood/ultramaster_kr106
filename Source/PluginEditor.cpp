@@ -202,6 +202,10 @@ void KR106Editor::showSettingsMenu()
     items.push_back(KR106MenuItem::sep());
     items.push_back(KR106MenuItem::item(20, "Ignore MIDI Velocity",      true, mProcessor.mIgnoreVelocity));
     items.push_back(KR106MenuItem::item(21, "Limit Arp to Kbd Range", true, mProcessor.mArpLimitKbd));
+    items.push_back(KR106MenuItem::sep());
+    int os = mProcessor.mVcfOversample;
+    items.push_back(KR106MenuItem::item(30, "VCF Oversample 2x", true, os == 2));
+    items.push_back(KR106MenuItem::item(31, "VCF Oversample 4x", true, os == 4));
 
     mSettingsMenu = std::make_unique<KR106MenuSheet>(std::move(items), mMenuTypeface,
         [this](int r)
@@ -233,6 +237,14 @@ void KR106Editor::showSettingsMenu()
             {
                 mProcessor.mArpLimitKbd = !mProcessor.mArpLimitKbd;
                 mProcessor.mDSP.mArp.mLimitToKeyboard = mProcessor.mArpLimitKbd;
+            }
+            int newOS = r == 30 ? 2 : r == 31 ? 4 : 0;
+            if (newOS > 0 && newOS != mProcessor.mVcfOversample)
+            {
+                mProcessor.mVcfOversample = newOS;
+                mProcessor.mDSP.ForEachVoice([newOS](kr106::Voice<float>& v) {
+                    v.mVCF.SetOversample(newOS);
+                });
             }
             mProcessor.saveGlobalSettings();
         });
@@ -287,7 +299,11 @@ bool KR106Editor::keyPressed(const juce::KeyPress& key)
 {
     int code = key.getKeyCode();
 
-    // Arrow/page keys: preset navigation
+    // Left/right arrows: cycle scope modes
+    if (key == juce::KeyPress::leftKey)  { mScope->cycleMode(-1); return true; }
+    if (key == juce::KeyPress::rightKey) { mScope->cycleMode(1);  return true; }
+
+    // Up/down/page keys: preset navigation
     int delta = 0;
     if (key == juce::KeyPress::upKey)        delta = -1;
     else if (key == juce::KeyPress::downKey) delta =  1;
@@ -304,6 +320,9 @@ bool KR106Editor::keyPressed(const juce::KeyPress& key)
         repaint();
         return true;
     }
+
+    // Enter: open preset sheet
+    if (key == juce::KeyPress::returnKey) { mPresetDisplay->openPresetSheet(); return true; }
 
     // Z/X: octave shift
     if (code == 'Z') { mQwertyBase = juce::jmax(0, mQwertyBase - 12);  qwertyAllNotesOff(); return true; }
@@ -348,6 +367,13 @@ bool KR106Editor::keyPressed(const juce::KeyPress& key)
         p->beginChangeGesture();
         p->setValueNotifyingHost(static_cast<float>(next));
         p->endChangeGesture();
+        return true;
+    }
+
+    // '0': filter test mode (noise + sweep)
+    if (code == '0')
+    {
+        mProcessor.mDSP.mFilterTestTrigger.store(true);
         return true;
     }
 

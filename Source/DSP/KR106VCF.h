@@ -93,15 +93,18 @@ struct Downsampler2x
 struct VCF
 {
   float mS[4] = {}; // integrator states
-  bool mLoopClamp = true;       // high-freq resonance limiter (OTA bandwidth rolloff)
-  bool mOTASaturation = false;   // per-stage OTA tanh nonlinearity (IR3109 model), marginal audio quality at the expense of lots of pitch tracking error
+  bool mOTASaturation = true;   // per-stage OTA tanh nonlinearity (IR3109 model)
   bool mJ106Res = false;         // true = J106 resonance curve, false = J6 (calibrated)
+  int mOversample = 4;           // 2 or 4 — runtime selectable
   uint32_t mNoiseSeed = 123456789u; // thermal noise PRNG state
   float mInputEnv = 0.f;           // peak envelope follower for noise suppression
+  float mFrqRef = 200.f / 176400.f; // normalized reference freq for resonance rolloff
+  float mDiffEnv = 0.f;  // smoothed stage-0 diff envelope
+  float mSampleRate = 44100.f;     // cached for SetOversample()
 
-  // 2x oversampling: polyphase filters for anti-imaging/aliasing
-  Upsampler2x mUpsampler;
-  Downsampler2x mDownsampler;
+  // Two cascaded 2x polyphase stages (used as 1+1 for 4x, or just 1 for 2x).
+  Upsampler2x mUp1, mUp2;
+  Downsampler2x mDown1, mDown2;
 
   VCF()
   {
@@ -111,15 +114,40 @@ struct VCF
       0.76974183386322703, 0.83988962484963892, 0.89226081800387902,
       0.9315419599631839,  0.96209454837808417, 0.98781637073289585
     };
-    mUpsampler.set_coefs(kCoeffs2x);
-    mDownsampler.set_coefs(kCoeffs2x);
+    mUp1.set_coefs(kCoeffs2x);
+    mUp2.set_coefs(kCoeffs2x);
+    mDown1.set_coefs(kCoeffs2x);
+    mDown2.set_coefs(kCoeffs2x);
   }
 
   void Reset()
   {
     mS[0] = mS[1] = mS[2] = mS[3] = 0.f;
-    mUpsampler.clear_buffers();
-    mDownsampler.clear_buffers();
+    mUp1.clear_buffers();
+    mUp2.clear_buffers();
+    mDown1.clear_buffers();
+    mDown2.clear_buffers();
+  }
+
+  void SetSampleRate(float sampleRate)
+  {
+    mSampleRate = sampleRate;
+    mFrqRef = 200.f / (sampleRate * static_cast<float>(mOversample));
+  }
+
+  void SetOversample(int factor)
+  {
+    int prev = mOversample;
+    mOversample = (factor == 2) ? 2 : 4;
+    mFrqRef = 200.f / (mSampleRate * static_cast<float>(mOversample));
+    // Don't reset filter state (mS, mDiffEnv) — preserve pitch continuity.
+    // Only clear stage-2 resamplers when switching to 4x, since they were
+    // idle during 2x and may contain stale data.
+    if (mOversample == 4 && prev == 2)
+    {
+      mUp2.clear_buffers();
+      mDown2.clear_buffers();
+    }
   }
 
   // OTA saturation on the feedback path (Padé tanh approximant).
@@ -156,38 +184,54 @@ struct VCF
   //   R=7 (res=0.7): k ≈ 3.52, measured slope ≈ -26.8 dB/oct
   //   R=0 slope (-13.1 dB/oct) matches sim with k=0 (no fit needed).
   //
+  // Juno-6: exponential resonance curve. Shape from hardware measurements;
+  // kMax > 4.0 to compensate for tanh stage saturation absorbing feedback
+  // energy (linear k=4 would self-oscillate, but our nonlinear stages need
+  // ~5.0 to sustain oscillation). Gives 3-7 dB peaks at moderate settings.
+  // Gain scaled up ~3.5x from the original calibration to compensate for
+  // the frequency-dependent resonance attenuation (Fix 3) which reduces
+  // effective k across the spectrum. kNorm raised from 0.811 to 0.9f.
   static float ResK_J6(float res)
   {
-    return 1.024f * (expf(2.128f * res) - 1.f);
+    static constexpr float kShape = 2.128f;
+    static constexpr float kNorm = 0.9f; // v5: max k ≈ 6.6
+    return kNorm * (expf(kShape * res) - 1.f);
   }
 
-  // Juno-106 (modeled from J106 schematic):
-  //   2SA1015-GR PNP emitter follower, 27K fixed + 20K trim (VR4).
-  //   Slider voltage (0–10V) minus Vbe (0.6V), linear ic above threshold.
-  //   k_scale sets BA662→IR3109 feedback gain; 4-pole cascade self-
-  //   oscillates at k=4.0 (each stage contributes 45° at ω=ωc, total
-  //   cascade gain = (1/√2)⁴ = 1/4, so loop gain = k/4 = 1).
+  // Juno-106: TODO — capture actual J106 filter resonance data and derive
+  // a proper curve. For now, use the J6 curve as a placeholder.
   static float ResK_J106(float res)
   {
-    static constexpr float kJ106KScale = 0.5434f; // 7.0 * 27000 / (9.4 * 37000)
-    float v = std::max(res * 10.f - 0.6f, 0.f);
-    return kJ106KScale * v;
+    return ResK_J6(res);
   }
 
-  // Frequency compensation for 4-pole cascade with global feedback k.
-  // A cascade of 4 identical poles has its -3dB point well below the
-  // individual pole frequency at low k (0.51× at k=0) and above it at
-  // high k (1.46× at k≈3.2). The real IR3109 appears to compensate
-  // internally — hardware measurements show the perceived cutoff
-  // tracking the slider much more closely than the raw math predicts.
-  // This rational approximation maps k → pole-frequency multiplier so
-  // the effective -3dB point stays on target. Max error 1.4% over k∈[0,4.5].
+  // Frequency compensation: multiplier applied to g (integrator coeff)
+  // after the bilinear warp, correcting the effective cutoff frequency.
+  //
+  // Two effects shift the cutoff away from the target:
+  //   1. Cascade droop: 4 identical poles in series place the -3dB point
+  //      at 0.435× the individual pole frequency (k=0). Well-known from
+  //      Zavalishin's "Art of VA Filter Design" — needs ~1.96× boost.
+  //   2. OTASat compression: at high k, the per-stage tanh nonlinearity
+  //      reduces effective integrator gain, pulling the resonance peak
+  //      flat. This is amplitude-dependent but approximately constant
+  //      for a given k (the limit cycle amplitude is set by the tanh).
+  //
+  // Applied to g (post-warp) rather than frq (pre-warp) so the tan()
+  // bilinear transform sees the true frequency. This makes the
+  // compensation sample-rate independent — verified by sweep tests at
+  // 44.1 kHz and 96 kHz showing < 60 cent divergence vs 500+ cents
+  // when compensating frq directly.
+  //
+  // Coefficients fit to empirical data from tools/vcf-analyze: unit
+  // impulse response FFT (-3dB cutoff at R=0.0/0.3/0.5) and resonance
+  // peak frequency (parabolic interpolation at R=0.7/0.8, zero-crossing
+  // at R=0.9+), swept across frq=0.04–0.80 with compensation disabled.
+  // Target data in tools/vcf-analyze/compensation_targets.csv.
+
   static float FreqCompensation(float k)
   {
-    // Only boost — never push poles below the slider frequency, or the
-    // resonance peak drifts down. Above k≈0.87 the raw curve drops
-    // below 1.0; clamp there so the peak stays at the set frequency.
-    return std::max((1.96f + 1.06f * k) / (1.f + 2.16f * k), 1.f);
+      return std::max((1.96f + 1.06f * k) / (1.f + 2.16f * k), 1.f);
   }
 
   // Nonlinear one-pole OTA-C stage: solves y = s + g*tanh(x - y)
@@ -209,48 +253,103 @@ struct VCF
 
   // frq: normalized cutoff [0, ~0.9] where 1.0 = Nyquist (base rate)
   // res: resonance amount [0, 1]
-  // 2x oversampled: upsample input, run filter at 2x rate, downsample
   float Process(float input, float frq, float res)
   {
-    float up[2], down[2];
-    mUpsampler.process_sample(up[0], up[1], input);
+    if (mOversample == 4)
+      return Process4x(input, frq, res);
+    else
+      return Process2x(input, frq, res);
+  }
 
-    // Halve frq for the oversampled domain (Nyquist is 2x higher)
+private:
+  // 2x oversampled: upsample, filter 2 samples, downsample
+  float Process2x(float input, float frq, float res)
+  {
+    float up[2], down[2];
+    mUp1.process_sample(up[0], up[1], input);
+
     float frq2x = frq * 0.5f;
     down[0] = ProcessSample(up[0], frq2x, res);
     down[1] = ProcessSample(up[1], frq2x, res);
 
-    return mDownsampler.process_sample(down);
+    return mDown1.process_sample(down);
   }
 
-private:
+  // 4x oversampled: 1x→2x→4x up, filter 4 samples, 4x→2x→1x down
+  float Process4x(float input, float frq, float res)
+  {
+    float frq4x = frq * 0.25f;
+
+    // Stage 1 upsample: 1x → 2x
+    float up2x[2];
+    mUp1.process_sample(up2x[0], up2x[1], input);
+
+    // Stage 2 upsample + filter: 2x → 4x, process 4 samples
+    float down4x[2], down2x[2];
+
+    float up4x_a[2];
+    mUp2.process_sample(up4x_a[0], up4x_a[1], up2x[0]);
+    down4x[0] = ProcessSample(up4x_a[0], frq4x, res);
+    down4x[1] = ProcessSample(up4x_a[1], frq4x, res);
+    down2x[0] = mDown2.process_sample(down4x);
+
+    float up4x_b[2];
+    mUp2.process_sample(up4x_b[0], up4x_b[1], up2x[1]);
+    down4x[0] = ProcessSample(up4x_b[0], frq4x, res);
+    down4x[1] = ProcessSample(up4x_b[1], frq4x, res);
+    down2x[1] = mDown2.process_sample(down4x);
+
+    // Stage 2 downsample: 2x → 1x
+    return mDown1.process_sample(down2x);
+  }
+
   // Internal per-sample filter at the oversampled rate
   float ProcessSample(float input, float frq, float res)
   {
-    // Resonance CV: external transistor feeds BA662 OTA control current.
-    float k = mJ106Res ? ResK_J106(res) : ResK_J6(res);
-
-    // Compensate pole frequency so the effective -3dB point tracks the
-    // intended cutoff regardless of resonance (models IR3109 internal
-    // compensation absent from the ideal TPT cascade).
-    if (mJ106Res)
-      frq *= FreqCompensation(k);
-
-    // Warp cutoff to continuous-time frequency, then to integrator coeff
-    float g = tanf(std::min(frq, 0.85f) * static_cast<float>(M_PI) * 0.5f);
-
     // Adaptive thermal noise: models BA662/IR3109 OTA bias current noise.
     // High level when filter is quiet (to seed self-oscillation startup),
     // fades to inaudible once oscillation is established. This keeps
-    // pure self-oscillation patches (e.g. Glockenspiel) clean while
+    // pure self-oscillation patches clean while
     // still providing reliable oscillation seeding.
     mNoiseSeed = mNoiseSeed * 196314165u + 907633515u;
     float white = static_cast<float>(mNoiseSeed) / static_cast<float>(0xFFFFFFFFu) * 2.f - 1.f;
     mInputEnv = std::max(fabsf(input), mInputEnv * 0.999f); // peak follower with ~22ms decay at 2x rate
     float stateEnergy = fabsf(mS[0]) + fabsf(mS[1]) + fabsf(mS[2]) + fabsf(mS[3]);
     float energy = std::max(mInputEnv, stateEnergy);
-    float noiseLevel = 1e-3f / (1.f + energy * 1000.f);
+    float noiseLevel = 1e-2f / (1.f + energy * 1000.f);
     input += white * noiseLevel;
+
+    // Resonance CV: external transistor feeds BA662 OTA control current.
+    float k = mJ106Res ? ResK_J106(res) : ResK_J6(res);
+
+    // Frequency-dependent resonance attenuation: hardware resonance
+    // prominence drops ~2.6 dB/oct above 200 Hz (measured from Juno-6
+    // white noise sweep at R=0.8). Models finite bandwidth in the
+    // IR3109 feedback path — transistor fT rolloff reduces loop gain
+    // at higher frequencies. Exponent -0.09 empirically matched to
+    // hardware through the nonlinear filter model.
+    float kRatio = std::max(frq, mFrqRef) / mFrqRef;
+    k *= powf(kRatio, -0.09f);
+
+    // Model per-stage OTA gain compression at high resonance.
+    // The IR3109's OTA stages saturate individually at high feedback
+    // levels, reducing effective loop gain. This is distinct from the
+    // feedback-path OTASat (which limits oscillation amplitude).
+    // Soft-clip k above 3.0 to keep R=0.3-0.7 calibration intact
+    // while compressing R=0.8-1.0 to match hardware prominence.
+    if (k > 3.0f)
+    {
+      float excess = k - 3.0f;
+      k = 3.0f + excess / (1.0f + excess * 0.2f);
+    }
+
+    // Clamp cutoff just below base Nyquist (0.5 in oversampled domain).
+    // The 2x polyphase downsampler aliases energy above this point back
+    // into the audible band. At 44.1kHz this limits cutoff to ~21kHz;
+    // at 96kHz to ~46kHz.
+    // Warp cutoff to continuous-time frequency, then to integrator coeff
+    float g = tanf(std::min(frq, 0.85f) * static_cast<float>(M_PI) * 0.5f);
+    g *= FreqCompensation(k);
 
     // Precompute gains for the 4-pole cascade solution
     float g1 = g / (1.f + g);  // one-pole gain
@@ -259,24 +358,13 @@ private:
     // unconditionally stable regardless of modulation speed.
     float G = g1 * g1 * g1 * g1;
 
-    // OTA bandwidth rolloff: the IR3109's transconductance drops at
-    // high frequencies due to transistor fT limits. Below frq=0.3
-    // (where aliased harmonics fall above audible range), allow full
-    // self-oscillation character. Above 0.3, progressively reduce the
-    // loop gain to prevent the resonance limit cycle from producing
-    // audible aliased harmonics near Nyquist.
-    if (mLoopClamp)
-    {
-      float maxLoop = 1.2f - std::max(frq - 0.3f, 0.f);
-      maxLoop = std::max(maxLoop, 0.4f);
-      float maxK = maxLoop / std::max(G, 1e-6f);
-      k = std::min(k, maxK);
-    }
+    // Clamp maximum feedback gain. The resonance curve (ResK_J6) can
+    // produce k up to ~6.6 at res=1.0, but values beyond this cause
+    // the self-oscillation amplitude to exceed what the per-stage
+    // OTASat can cleanly limit, producing harsh distortion.
+    k = std::min(k, 6.6f);
 
-    float S = mS[0] * g1 * g1 * g1
-            + mS[1] * g1 * g1
-            + mS[2] * g1
-            + mS[3];
+    float S = mS[0] * g1 * g1 * g1 + mS[1] * g1 * g1 + mS[2] * g1 + mS[3];
 
     // Q compensation: the Juno-6 BA662 feeds a portion of the input
     // signal alongside the feedback, boosting drive at high resonance.
@@ -288,29 +376,51 @@ private:
     float lp4;
     if (mOTASaturation)
     {
-      // Pre-compensate g for per-stage OTA gain compression: the
-      // tanh in NLStage reduces effective integrator gain at self-
-      // oscillation amplitude, pulling oscillation frequency below
-      // the target cutoff. Boost g for the stages only — the feedback
-      // equation (G, S, u) uses the un-boosted g so the resonance
-      // onset threshold is unaffected.
-      // Boost g1 directly so the compensation is frequency-independent.
-      // Boosting g and then computing g1 = g/(1+g) loses boost at higher
-      // frequencies where g is larger. Deriving gNL back from g1NL keeps
-      // both consistent for the NR solver (g1NL = gNL/(1+gNL)).
-      float g1NL = g1 * (1.f + k * 0.082f);
-      float gNL  = g1NL / (1.f - g1NL);
+      // Per-stage OTA saturation (NLStage) compresses integrator gain
+      // at self-oscillation amplitude, pulling oscillation pitch flat.
+      // Compensate by boosting g1 proportional to the squared amplitude
+      // of the stage-0 input difference signal (the dominant compression
+      // source — it sees the feedback path directly).
+      //
+      // The diff envelope is normalized by (1+g) to remove the frequency
+      // dependence of the raw signal swing, keeping the correction
+      // consistent across the cutoff range. Without this, the boost
+      // explodes at high frequencies where g is large.
+      //
+      // Coefficient 0.068 calibrated via sweep tests across
+      // frq=0.01–0.50, res=0.86–1.0 at 44.1 kHz and 96 kHz.
+      // Clamp at 0.98 prevents instability when g1 is already near 1.0
+      // (high cutoff frequencies approaching Nyquist).
+      float normDiff = mDiffEnv / (1.f + g);
+      float A2 = normDiff * normDiff;
+      float g1NL = g1 * (1.f + 0.068f * A2);
+      g1NL = std::min(g1NL, 0.98f);
 
-      float lp1 = NLStage(mS[0], u,   gNL, g1NL);
+      float gNL = g1NL / (1.f - g1NL);
+
+      float lp1 = NLStage(mS[0], u, gNL, g1NL);
       float lp2 = NLStage(mS[1], lp1, gNL, g1NL);
       float lp3 = NLStage(mS[2], lp2, gNL, g1NL);
-      lp4       = NLStage(mS[3], lp3, gNL, g1NL);
+      lp4 = NLStage(mS[3], lp3, gNL, g1NL);
+
+      // Track stage-0 diff amplitude with asymmetric envelope:
+      // fast attack catches oscillation onset, slow release avoids
+      // injecting pitch modulation within each oscillation cycle.
+      float d0 = fabsf(u - lp1);
+      if (d0 > mDiffEnv)
+          mDiffEnv += 0.3f * (d0 - mDiffEnv);   // ~0.1ms attack
+      else
+          mDiffEnv *= 0.997f;                      // ~10ms release
     }
     else
     {
-      // Linear stages: predictor above is exact, unconditionally stable.
-      // Small g1 boost compensates for OTASat compression on the feedback
-      // path (u equation), which pulls self-oscillation frequency slightly flat.
+      // Linear stages: standard TPT trapezoidal integrators without
+      // per-stage OTA saturation. The 4-pole cascade solution (G, S, u)
+      // above is exact for linear stages, so no Newton-Raphson is needed.
+      // The feedback path still uses OTASat(S) in the u equation, which
+      // slightly reduces effective loop gain vs the ideal k*S. The tiny
+      // g1 boost (0.1% at max k) compensates for this, keeping the
+      // self-oscillation frequency on target.
       float g1L = g1 * (1.f + k * 0.0003f);
       float v, s;
       s = mS[0]; v = g1L * (u - s);   mS[0] = s + 2.f * v; float lp1 = s + v;

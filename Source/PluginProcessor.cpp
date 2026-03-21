@@ -1083,6 +1083,12 @@ void KR106AudioProcessor::loadGlobalSettings()
   auto arpLimit = KR106PresetManager::getSetting("arpLimitKbd", true);
   mArpLimitKbd = (bool)arpLimit;
   mDSP.mArp.mLimitToKeyboard = mArpLimitKbd;
+
+  auto vcfOS = KR106PresetManager::getSetting("vcfOversample", 4);
+  mVcfOversample = ((int)vcfOS == 2) ? 2 : 4;
+  mDSP.ForEachVoice([this](kr106::Voice<float>& v) {
+    v.mVCF.SetOversample(mVcfOversample);
+  });
 }
 
 void KR106AudioProcessor::saveGlobalSettings()
@@ -1091,6 +1097,7 @@ void KR106AudioProcessor::saveGlobalSettings()
   KR106PresetManager::saveSetting("voiceCount", mVoiceCount);
   KR106PresetManager::saveSetting("ignoreVelocity", mIgnoreVelocity);
   KR106PresetManager::saveSetting("arpLimitKbd", mArpLimitKbd);
+  KR106PresetManager::saveSetting("vcfOversample", mVcfOversample);
 }
 
 juce::AudioProcessorEditor* KR106AudioProcessor::createEditor()

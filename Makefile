@@ -4,10 +4,13 @@ CONFIG   ?= Debug
 .PHONY: build run reaper clean deps help
 
 build:
+	# Touch .cpp so CMake picks up header-only DSP changes
+	@touch Source/PluginProcessor.cpp Source/PluginEditor.cpp
 	cmake -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CONFIG)
 	cmake --build $(BUILD_DIR) --config $(CONFIG)
 
 run: build
+	-killall "Ultramaster KR-106" 2>/dev/null; sleep 0.5
 	open "$(BUILD_DIR)/KR106_artefacts/$(CONFIG)/Standalone/Ultramaster KR-106.app"
 
 reaper: build

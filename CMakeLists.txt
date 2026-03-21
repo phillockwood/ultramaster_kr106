@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KR106 VERSION 2.2.3)
+project(KR106 VERSION 2.3.0)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
 
@@ -18,6 +18,8 @@ juce_add_plugin(KR106
     FORMATS ${KR106_FORMATS}
     PRODUCT_NAME "Ultramaster KR-106"
     PLUGIN_NAME "Ultramaster KR-106"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/img/icon_1024.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/resources/img/icon_1024.png"
     LV2URI "https://kayrock.org/kr106"
     COPY_PLUGIN_AFTER_BUILD TRUE
 )

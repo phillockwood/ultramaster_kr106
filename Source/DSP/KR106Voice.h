@@ -110,7 +110,7 @@ public:
       return static_cast<float>(seed) / static_cast<float>(0xFFFFFFFF) * 2.f - 1.f;
     };
 
-    mVcfFreqOffset   = 0.f; // rng() * 0.05f;        // ±5% filter cutoff — disabled for testing
+    mVcfFreqOffset   = rng() * 0.05f;        // ±5% filter cutoff
     mPitchOffset     = rng() * 3.f / 1200.f; // ±3 cents (in octaves)
     mADSR.mTimeScale = 1.f + rng() * 0.08f;  // ±8% envelope timing
     mVcaGainScale    = 1.f + rng() * 0.06f;  // ±0.5 dB VCA gain
@@ -388,18 +388,11 @@ public:
     if (!isRetrigger)
     {
       mOsc.Reset();
-      mVCF.Reset();
+      // VCF is NOT reset on note-on — matches real hardware where
+      // the filter runs continuously (self-oscillation persists
+      // between notes, frequency just shifts with keyboard tracking).
       mScopeSyncPhase = 0.f;
       mScopeSyncSub = false;
-      // Seed filter state for instant self-oscillation startup.
-      // On real hardware the filter is always processing (even when VCA
-      // is closed), so self-oscillation is already at full amplitude when
-      // a key is pressed. Digitally, idle voices have zero state, so we
-      // inject energy proportional to resonance. At res=1.0 the seed of
-      // 0.3 matches the steady-state self-oscillation amplitude, giving
-      // near-instant startup for patches like Glockenspiel.
-      float resSeed = std::max(mVcfRes - 0.7f, 0.f) / 0.3f; // 0 at res<=0.7, 1 at res=1.0
-      mVCF.mS[0]    = 0.3f * resSeed;
     }
   }
 
@@ -411,6 +404,7 @@ public:
     mSampleRate = static_cast<float>(sampleRate);
     mADSR.SetSampleRate(mSampleRate);
     mOsc.Init(mSampleRate);
+    mVCF.SetSampleRate(mSampleRate);
 
     // Precomputed constants for VCF frequency calculation.
     // VCF modulation works in log-frequency space; these convert
@@ -578,7 +572,7 @@ public:
         // the exponential converter — matches the real hardware signal
         // path: DAC → analog RC → IR3109 expo converter.
         mVcfDacSmooth += (static_cast<float>(mVcfDacNext) - mVcfDacSmooth) * mDacSmoothCoeff;
-        float vcfHz = kr106::dacToHz(static_cast<uint16_t>(mVcfDacSmooth));
+        float vcfHz = kr106::dacToHz(static_cast<uint16_t>(std::clamp(mVcfDacSmooth, 0.f, 16256.f)));
         vcfCPS = vcfHz * mInvNyq;
       }
 
