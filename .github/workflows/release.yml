@@ -159,7 +159,6 @@ jobs:
             libasound2-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
             libfreetype-dev \
-            libwebkit2gtk-4.1-dev \
             mesa-common-dev libgl-dev
 
       - name: Configure
@@ -213,7 +212,6 @@ jobs:
             libasound2-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
             libfreetype-dev \
-            libwebkit2gtk-4.1-dev \
             mesa-common-dev libgl-dev
 
       - name: Configure
