@@ -261,6 +261,13 @@ struct VCF
       return Process2x(input, frq, res);
   }
 
+  // Direct access to the raw filter kernel (no oversampling).
+  // Caller is responsible for running at the correct rate.
+  float ProcessDirect(float input, float frq, float res)
+  {
+    return ProcessSample(input, frq, res);
+  }
+
 private:
   // 2x oversampled: upsample, filter 2 samples, downsample
   float Process2x(float input, float frq, float res)

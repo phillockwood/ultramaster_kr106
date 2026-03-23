@@ -14,6 +14,7 @@ KR106Editor::KR106Editor(KR106AudioProcessor& p)
         auto& displays = juce::Desktop::getInstance().getDisplays();
         auto* display = displays.getPrimaryDisplay();
         mUIScale = (display && display->scale < 1.5) ? 2.f : 1.f;
+        p.mUIScale = mUIScale; // persist so it survives window recreation
     }
     if (mUIScale != 1.f)
         setTransform(juce::AffineTransform::scale(mUIScale));

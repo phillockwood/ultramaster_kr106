@@ -26,6 +26,10 @@ public:
   VCF mVCF;
   ADSR mADSR;
 
+  // Voice-level downsamplers for combined osc+VCF oversampling
+  Downsampler2x mVoiceDown1, mVoiceDown2;
+
+
   // Voice control (replaces iPlug2 mInputs ControlRamps)
   double mPitch     = 0.0; // 1V/oct relative to A440
   double mPitchBend = 0.0; // pitch bend in octaves
@@ -460,6 +464,16 @@ public:
     mADSR.SetSampleRate(mSampleRate);
     mOsc.Init(mSampleRate);
     mVCF.SetSampleRate(mSampleRate);
+    {
+      static constexpr double kCoeffs2x[12] = {
+        0.036681502163648017, 0.13654762463195794, 0.27463175937945444,
+        0.42313861743656711, 0.56109869787919531, 0.67754004997416184,
+        0.76974183386322703, 0.83988962484963892, 0.89226081800387902,
+        0.9315419599631839,  0.96209454837808417, 0.98781637073289585
+      };
+      mVoiceDown1.set_coefs(kCoeffs2x);
+      mVoiceDown2.set_coefs(kCoeffs2x);
+    }
 
     // Precomputed constants for VCF frequency calculation.
     // VCF modulation works in log-frequency space; these convert
@@ -571,12 +585,7 @@ public:
         continue;
       }
 
-      // --- Oscillators ---
-      bool sync    = false;
-      float oscOut = mOsc.Process(cps, pw, mSawOn, mPulseOn, mSubOn, mDcoSub, mDcoNoise, sync);
-
       // Scope sync: shadow accumulator at base pitch (all mod except LFO)
-      // so LFO pitch modulation is visible as waveform drift on the scope.
       if (mSyncOut)
       {
         float nonLfoPitch = mOctTranspose / 12.f + mPitchOffset + mRawBend * mBendDco;
@@ -595,26 +604,11 @@ public:
       float vcfCPS;
       if (mADSR.mJ6Mode)
       {
-        // J6: All modulation sources sum in log-frequency space, modeling
-        // voltage summing into the IR3109's exponential converter.
-        //
-        // Scaling from Juno-6 published specs and circuit analysis:
-        //   ENV:  10 octaves at max slider (invert path 1.121× normal,
-        //         from IC8 gain asymmetry: R104/R99 vs R103/R98)
-        //   LFO:  depth in semitones (from dcoLfoDepth6/106)
-        //   KBD:  0–100% keyboard tracking (1.0 = 1V/oct)
-        //   Bend: 6 octaves range (tuned independently from LFO)
-        static constexpr float kEnvScale = 6.931f; // 10 * ln(2): 10 octaves
-        static constexpr float kEnvInvScale =
-            7.766f; // 10 * 1.121 * ln(2): inverted path gain asymmetry
-        static constexpr float kSemiToLogFreq = 0.05776f; // ln(2)/12: semitones to log-freq
+        static constexpr float kEnvScale = 6.931f;
+        static constexpr float kEnvInvScale = 7.766f;
+        static constexpr float kSemiToLogFreq = 0.05776f;
 
         float envScale = (mVcfEnvInvert > 0) ? kEnvScale : kEnvInvScale;
-
-        // Classic J6: analog slider curve, KBD tracking from C1 (32.703 Hz)
-        // J106-compatible (default): J106 freq curve, KBD tracking from C4 (261.626 Hz)
-        // The 3-octave difference in KBD ref compensates for the J106's higher base freq,
-        // so patches with keyboard tracking sound correct across both engines.
         float vcfBaseHz = mJ6ClassicVcf ? mVcfFreq : mVcfFreqJ106;
         float kbdRef    = mJ6ClassicVcf ? 32.703f  : 261.626f;
         float vcfFrq = logf(vcfBaseHz) + mVcfFreqOffset;
@@ -622,32 +616,51 @@ public:
         vcfFrq += logf(baseFreq / kbdRef) * mVcfKbd;
         vcfFrq += env * mVcfEnv * envScale * float(mVcfEnvInvert);
         vcfFrq += lfo * mVcfLfo * kSemiToLogFreq;
-        vcfFrq += 4.15888f * mRawBend * mBendVcf; // bender (6 oct range, tuned separately)
+        vcfFrq += 4.15888f * mRawBend * mBendVcf;
 
         vcfCPS = expf(vcfFrq) * mInvNyq;
       }
       else
       {
-        // J106: DAC already computed by unified firmware tick above.
-        // RC smooth the stairstepped DAC value, then convert through
-        // the exponential converter — matches the real hardware signal
-        // path: DAC → analog RC → IR3109 expo converter.
         mVcfDacSmooth += (static_cast<float>(mVcfDacNext) - mVcfDacSmooth) * mDacSmoothCoeff;
         float vcfHz = kr106::dacToHz(static_cast<uint16_t>(std::clamp(mVcfDacSmooth, 0.f, 16256.f)));
         vcfCPS = vcfHz * mInvNyq;
       }
 
-      // Clamp to 20 Hz floor (no upper clamp — 2x oversampled TPT is stable to Nyquist)
       vcfCPS = std::max(vcfCPS, mMinCPS);
-
-      // Fade resonance near base-rate Nyquist: self-oscillation above
-      // ~18 kHz folds into the audible range during 2x→1x downsampling.
-      // Models IR3109 OTA transconductance rolloff near fT limits.
       float res = mVcfRes * (1.f - std::clamp((vcfCPS - 0.8f) * 5.f, 0.f, 1.f));
 
-      float filtered = mVCF.Process(oscOut, vcfCPS, res);
+      // --- Oversampled osc + VCF ---
+      // Run oscillator and filter together at the oversampled rate.
+      // 4th-order PolyBLEP + oversampling gives excellent alias rejection.
+      float signal;
+      int os = mVCF.mOversample;
+      float osCps = cps / static_cast<float>(os);
+      float osVcfCps = vcfCPS / static_cast<float>(os);
 
-      float signal = filtered;
+      if (os == 4)
+      {
+        bool sync = false;
+        float s2x[2], s4x[2];
+
+        s4x[0] = mVCF.ProcessDirect(mOsc.Process(osCps, pw, mSawOn, mPulseOn, mSubOn, mDcoSub, mDcoNoise, sync), osVcfCps, res);
+        s4x[1] = mVCF.ProcessDirect(mOsc.Process(osCps, pw, mSawOn, mPulseOn, mSubOn, mDcoSub, mDcoNoise, sync), osVcfCps, res);
+        s2x[0] = mVoiceDown2.process_sample(s4x);
+
+        s4x[0] = mVCF.ProcessDirect(mOsc.Process(osCps, pw, mSawOn, mPulseOn, mSubOn, mDcoSub, mDcoNoise, sync), osVcfCps, res);
+        s4x[1] = mVCF.ProcessDirect(mOsc.Process(osCps, pw, mSawOn, mPulseOn, mSubOn, mDcoSub, mDcoNoise, sync), osVcfCps, res);
+        s2x[1] = mVoiceDown2.process_sample(s4x);
+
+        signal = mVoiceDown1.process_sample(s2x);
+      }
+      else
+      {
+        bool sync = false;
+        float s2x[2];
+        s2x[0] = mVCF.ProcessDirect(mOsc.Process(osCps, pw, mSawOn, mPulseOn, mSubOn, mDcoSub, mDcoNoise, sync), osVcfCps, res);
+        s2x[1] = mVCF.ProcessDirect(mOsc.Process(osCps, pw, mSawOn, mPulseOn, mSubOn, mDcoSub, mDcoNoise, sync), osVcfCps, res);
+        signal = mVoiceDown1.process_sample(s2x);
+      }
 
       // --- VCA ---
       float vcaOut;

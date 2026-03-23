@@ -124,6 +124,7 @@ private:
   // Last-applied values — compared in processBlock to detect changes
   float mLastParamValues[kNumParams] = {};
   bool mPowerOn = true;
+  bool mWasJ106Mode = true; // tracks ADSR mode for HPF/VCF remap detection
 
   // UI→audio thread-safe note release queue
   static constexpr int kForceReleaseQueueSize = 64;

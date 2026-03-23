@@ -918,8 +918,10 @@ void KR106AudioProcessor::parameterChanged(int paramIdx, float newValue)
     mDSP.SetParam(paramIdx, static_cast<double>(newValue));
 
     // Remap VCF and HPF sliders when switching modes (frequency-matched)
-    if (paramIdx == kAdsrMode)
+    // Only remap if the mode actually changed (not just reloaded same value)
+    if (paramIdx == kAdsrMode && (newValue > 0.5f) != mWasJ106Mode)
     {
+      mWasJ106Mode = (newValue > 0.5f);
       // VCF freq: only remap when Classic VCF Frq Scale is on,
       // since otherwise both modes use dacToHz and share the same curve.
       if (mJ6ClassicVcf)

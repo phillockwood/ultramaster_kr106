@@ -22,16 +22,35 @@ static constexpr float kPulseAmp = 0.5f; // PULSE is 0v to +12v TL074
 static constexpr float kSubAmp = 0.625f; // SUB is 0v to +15v CMOS
 static constexpr float kSwitchRamp = 1.f / 64.f; // ~1.5ms at 44.1k
 
-// 2nd-order polyBLEP residual — smooths a discontinuity of height 1.
-// t: distance past the discontinuity in phase units [0, 1)
-// dt: phase increment per sample (cps)
+// 4th-order polyBLEP residual — smooths a discontinuity of height 2.
+// 4-sample window (2 before + 2 after the transition).
+// Derived from the integrated cubic B-spline.
+// t: phase position [0, 1)
+// dt: phase increment per sample (freq / sampleRate)
 inline float PolyBLEP(float t, float dt) {
+  float dt2 = dt + dt;
   if (t < dt) {
+    // 0..1 samples after transition
     float n = t / dt;
-    return n + n - n * n - 1.f;
+    float n2 = n * n;
+    return 0.25f * n2 * n2 - 0.66666667f * n2 * n
+           + 1.33333333f * n - 1.f;
+  } else if (t < dt2) {
+    // 1..2 samples after transition
+    float u = 1.f - (t - dt) / dt;
+    float u2 = u * u;
+    return -0.08333333f * u2 * u2;        // -(1/12)(1-n)^4
   } else if (t > 1.f - dt) {
+    // 0..1 samples before next transition
     float n = (t - 1.f) / dt;
-    return n * n + n + n + 1.f;
+    float n2 = n * n;
+    return -0.25f * n2 * n2 - 0.66666667f * n2 * n
+           + 1.33333333f * n + 1.f;
+  } else if (t > 1.f - dt2) {
+    // 1..2 samples before next transition
+    float u = 1.f + (t - 1.f + dt) / dt;
+    float u2 = u * u;
+    return 0.08333333f * u2 * u2;         // (1/12)(1+n)^4
   }
   return 0.f;
 }
@@ -152,10 +171,12 @@ struct Oscillators {
     // --- Saw: curved ramp + polyBLEP + reset blip ---
     float curvedPos = mPos * (1.f + kSawCurve * (1.f - mPos));
     float saw = 2.f * curvedPos - 1.f;
-    saw += PolyBLEP(mPos, cps); // step at reset is 2.0
+    saw -= PolyBLEP(mPos, cps); // step at reset is 2.0
 
-    mBlipEnv *= kBlipDecay;
-    saw -= mBlipEnv * kBlipAmp;
+    // Blip disabled: the 384 kHz ring data was likely a resampler artifact
+    // (FIXME note above), and the raw step adds uncompensated aliasing.
+    // mBlipEnv *= kBlipDecay;
+    // saw -= mBlipEnv * kBlipAmp;
 
     // --- Pulse: comparator on phase + polyBLEP at both edges ---
     // The hardware comparator sees the curved capacitor voltage, so
@@ -163,7 +184,8 @@ struct Oscillators {
     // quadratic to find the linear phase of the crossing for polyBLEP.
     float effPW = pulseWidth / (1.f + kSawCurve * (1.f - pulseWidth));
     if (mPulseInvert) effPW = 1.f - effPW; // J106: inverted duty cycle
-    effPW = std::clamp(effPW, cps, 1.f - cps);
+    float minPW = cps + cps; // 4th-order BLEP needs 2*dt clearance from edges
+    effPW = std::clamp(effPW, minPW, 1.f - minPW);
     float pulse = (mPos < effPW) ? -1.f : 1.f;
     pulse -= PolyBLEP(mPos, cps);   // falling edge at reset
     float pw2 = mPos - effPW;

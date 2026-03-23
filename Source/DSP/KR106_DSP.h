@@ -586,7 +586,7 @@ public:
   float mSliderVcfEnv = 0.f;
   float mSliderVcfKbd = 0.f;
   float mSliderBenderVcf = 0.f;
-  float mSliderHpf = 1.f; // default = "Flat" (mode 1 = value 1.0)
+  float mSliderHpf = 1.f; // default = Flat (mode 1)
 
   // --- Filter test mode (toggled by '0' key) ---
   std::atomic<bool> mFilterTestTrigger{false}; // UI thread sets true to start
