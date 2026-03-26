@@ -3,3 +3,4 @@ gen_filter_test
 *.csv
 *.wav
 *.mid
+*.log
