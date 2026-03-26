@@ -597,10 +597,10 @@ public:
         float kbdRef    = mJ6ClassicVcf ? 32.703f  : 261.626f;
         float vcfFrq = logf(vcfBaseHz) + mVcfFreqOffset;
 
-        // J6: KBD tracking sees the pitch CV (octave switch + VCF bend) but
-        // not LFO, which modulates the DCO separately. The bender lever routes
-        // to VCF and DCO independently — KBD tracking is on the VCF side.
-        float kbdPitch = mOctTranspose / 12.f + mPitchOffset + mRawBend * mBendVcf;
+        // J6: KBD tracking sees the pitch CV (octave switch + portamento)
+        // but not LFO or pitch bend. Bend modulates the VCF separately
+        // (line 608) — the KBD tracking tap is before the bender summing point.
+        float kbdPitch = mOctTranspose / 12.f + mPitchOffset;
         float kbdFreq = baseFreq * powf(2.f, kbdPitch);
         vcfFrq += logf(kbdFreq / kbdRef) * mVcfKbd;
         vcfFrq += env * mVcfEnv * envScale * float(mVcfEnvInvert);

@@ -344,20 +344,27 @@
 
   <!-- ============================================================ -->
   <details>
-  <summary><h2>Keyboard</h2></summary>
+  <summary style="flex-wrap: wrap;">
+    <h2>Keyboard</h2>
+    <img src="qwerty_keyboard.png" alt="QWERTY Keyboard" class="screenshot" style="margin-top: 0.8rem; pointer-events: none; flex-basis: 100%;">
+  </summary>
 
   <p>Click the on-screen keyboard to play notes. Drag across keys for legato.</p>
 
   <h3>QWERTY Keyboard</h3>
-  <p>When the plugin window has focus, the computer keyboard plays notes:</p>
+  <p>When the plugin window has focus, the computer keyboard plays notes in a standard two-octave piano layout. Open <strong>Keyboard Shortcuts</strong> from the right-click menu to see the full mapping.</p>
   <table>
     <tr><th>Keys</th><th>Action</th></tr>
-    <tr><td><kbd>A</kbd> <kbd>W</kbd> <kbd>S</kbd> <kbd>E</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>T</kbd> <kbd>G</kbd> <kbd>Y</kbd> <kbd>H</kbd> <kbd>U</kbd> <kbd>J</kbd> <kbd>K</kbd> <kbd>O</kbd> <kbd>L</kbd></td><td>Chromatic notes (C to D, just over one octave)</td></tr>
-    <tr><td><kbd>Z</kbd> / <kbd>X</kbd></td><td>Octave down / up</td></tr>
-    <tr><td><kbd>1</kbd>&ndash;<kbd>9</kbd></td><td>Toggle buttons: Transpose, Hold, Arp, Pulse, Saw, Sub, Chorus Off, I, II</td></tr>
+    <tr><td><kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd> <kbd>V</kbd> <kbd>B</kbd> <kbd>N</kbd> <kbd>M</kbd></td><td>Lower octave naturals (C D E F G A B)</td></tr>
+    <tr><td><kbd>S</kbd> <kbd>D</kbd> &ensp; <kbd>G</kbd> <kbd>H</kbd> <kbd>J</kbd></td><td>Lower octave sharps (C# D# F# G# A#)</td></tr>
+    <tr><td><kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd> <kbd>T</kbd> <kbd>Y</kbd> <kbd>U</kbd></td><td>Upper octave naturals (C D E F G A B)</td></tr>
+    <tr><td><kbd>2</kbd> <kbd>3</kbd> &ensp; <kbd>5</kbd> <kbd>6</kbd> <kbd>7</kbd></td><td>Upper octave sharps (C# D# F# G# A#)</td></tr>
+    <tr><td><kbd>,</kbd> <kbd>.</kbd> <kbd>/</kbd> &ensp; <kbd>I</kbd> <kbd>O</kbd> <kbd>P</kbd> <kbd>[</kbd></td><td>Extended notes (continue both rows)</td></tr>
+    <tr><td><kbd>`</kbd> / <kbd>1</kbd></td><td>Octave down / up</td></tr>
+    <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>Cycle scope modes</td></tr>
     <tr><td><kbd>&uarr;</kbd> <kbd>&darr;</kbd></td><td>Previous / next preset</td></tr>
     <tr><td><kbd>PgUp</kbd> <kbd>PgDn</kbd></td><td>Skip 8 presets</td></tr>
-    <tr><td><kbd>Enter</kbd></td><td>Open patch selector grid (navigate with arrow keys, Enter to select)</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>Open patch selector grid</td></tr>
   </table>
   </details>
 
@@ -506,6 +513,118 @@
   <p>The KR-106 sends and receives Roland Juno-106 SysEx messages (F0 41 32 ...). A full SysEx dump is emitted on every preset change, and individual parameter changes are echoed as SysEx in real time. This allows two KR-106 instances to stay in sync, or a hardware Juno-106 to mirror the plugin's state.</p>
   </details>
 
+  <!-- ============================================================ -->
+  <details>
+  <summary>
+    <h2>1982 vs 1984 Mode</h2>
+  </summary>
+
+  <p>The KR-106 models both the <strong>Juno-6</strong> (1982) and <strong>Juno-106</strong> (1984).
+     They share the same panel layout and basic architecture, but the internal
+     signal path is fundamentally different. The Juno-6 is fully analog; the
+     Juno-106 replaced most of the control circuitry with a microprocessor
+     (uPD7811G). Select the mode with the switch on the main panel below the ADSR sliders.</p>
+
+  <h3>VCF Frequency</h3>
+  <p><strong>1982:</strong> The VCF cutoff slider drives an analog CV that feeds
+     the IR3109 exponential converter directly. The slider-to-frequency curve
+     follows the analog pot taper and expo converter characteristics. Modulation
+     (envelope, LFO, keyboard tracking) sums into the same CV in continuous
+     analog fashion. With Classic VCF Frq Scale enabled, the range is ~2 Hz to 40 kHz.</p>
+  <p><strong>1984:</strong> The slider value is digitized to a 7-bit byte (0-127),
+     scaled to a 14-bit DAC value, and summed with envelope, LFO, and keyboard
+     tracking in integer arithmetic inside the firmware. The result is output
+     through a DAC and smoothed by a 1ms RC filter. The firmware runs a main
+     loop at 238.1 Hz (4.2ms per tick), so the VCF cutoff updates in discrete
+     steps rather than continuously. Range: ~5 Hz to 50 kHz.</p>
+  <p>Both modes are available in 1982 mode via the <strong>Classic VCF Frq Scale</strong>
+     setting (right-click menu). When enabled, the VCF frequency slider uses
+     the original Juno-6 analog curve and the keyboard tracking reference is C1
+     (32.7 Hz). When disabled (default), the 1982 mode uses the Juno-106 DAC
+     frequency curve with the keyboard tracking reference at middle C, giving
+     a more familiar response while keeping the analog envelope and modulation
+     behavior.</p>
+  <p>Note: the effective maximum cutoff is clamped below Nyquist, so at 44.1 kHz
+     the ceiling is ~21 kHz regardless of the slider curve. Running your DAW at
+     96 kHz raises this to ~46 kHz, allowing the full range of both curves.</p>
+
+  <h3>Keyboard Tracking</h3>
+  <p><strong>1982:</strong> The KBD tracking circuit taps the pitch CV directly,
+     which includes the octave transpose switch. Changing the octave range
+     shifts the VCF cutoff tracking point. Pitch bend does not affect KBD
+     tracking (it modulates the VCF separately via the bender-to-VCF slider).
+     The reference pitch is C1 (32.7 Hz) with Classic VCF Frq Scale enabled,
+     or middle C (261.6 Hz) without it.</p>
+  <p><strong>1984:</strong> The firmware calculates keyboard tracking from the raw
+     MIDI note number plus portamento glide. The octave transpose switch only
+     changes the DCO clock divider -- the firmware never sees it, so it does not
+     affect VCF cutoff. Pitch bend also does not affect KBD tracking (it has its
+     own separate VCF modulation path in the firmware). The reference point is
+     middle C (MIDI 60).</p>
+
+  <h3>Envelope (ADSR)</h3>
+  <p><strong>1982:</strong> Pure RC charge/discharge curves from the IR3R01 analog
+     envelope generator. Attack charges toward an overshoot target (1.2x) via
+     an exponential RC curve, giving a natural concave shape. Decay and release
+     are exponential RC discharges. Timing is calibrated from hardware
+     measurements across all slider positions on a real Juno-6.
+     Range: Attack 1ms-3s, Decay/Release 3ms-22s.</p>
+  <p><strong>1984:</strong> The D7811G firmware generates the envelope as a 16-bit
+     integer accumulator, updated at 238.1 Hz. Attack adds a fixed increment
+     per tick (larger increment = faster attack), producing a linear ramp --
+     distinctly different from the analog concave shape. Decay and release
+     use a per-tick multiply (coefficient from a ROM table), giving a
+     staircase-approximated exponential. A 1ms RC output filter smooths the
+     steps. Range: Attack 1ms-3.3s, Decay/Release ~1.5ms-25.5s.</p>
+
+  <h3>HPF (High-Pass Filter)</h3>
+  <p><strong>1982:</strong> Continuously variable HPF controlled by a pot.
+     Sweeps from 39 Hz to 1394 Hz (calibrated from 11 measurements on
+     hardware). Modeled as a 1-pole TPT high-pass filter.</p>
+  <p><strong>1984:</strong> 4-position switch:</p>
+  <ul>
+    <li><strong>0 (Bass Boost):</strong> Low-shelf filter at 150 Hz, +10 dB boost</li>
+    <li><strong>1 (Flat):</strong> Bypass (DC blocker only)</li>
+    <li><strong>2:</strong> 1-pole HPF at 240 Hz</li>
+    <li><strong>3:</strong> 1-pole HPF at 720 Hz</li>
+  </ul>
+
+  <h3>Slider Ranges</h3>
+  <p>Several parameters have different effective ranges between modes because the
+     analog circuits and firmware interpret the same slider position differently:</p>
+  <ul>
+    <li><strong>LFO Rate:</strong> 1982 uses a circuit model (TA75558S integrator + Schmitt trigger,
+        0.14-21 Hz). 1984 uses the firmware's rate table.</li>
+    <li><strong>DCO LFO Depth:</strong> 1982 models the 10K shunt-to-ground on a 50K linear pot
+        (analog taper). 1984 uses a linear mapping.</li>
+    <li><strong>VCF LFO Depth:</strong> Same difference (analog vs linear).</li>
+    <li><strong>VCF Frequency:</strong> Different slider-to-Hz curves as described above.</li>
+  </ul>
+
+  <h3>Other Differences</h3>
+  <ul>
+    <li><strong>Pulse polarity:</strong> The Juno-6 pulse wave has the narrow LOW portion
+        at the start of the ramp. The Juno-106's inverted comparator places it at the end.
+        Both produce 50%-97% duty cycle, but the phase relationship with the saw differs.</li>
+    <li><strong>Resonance curve:</strong> Both currently use the same exponential curve
+        (calibrated from Juno-6 hardware). A separate Juno-106 resonance curve is planned.</li>
+  </ul>
+
+  <h3>Preset Loading</h3>
+  <p>Factory presets are from the Juno-106 and store raw slider values as 0-127 bytes
+     (the Juno-6 had no preset memory). When you switch modes, the VCF frequency
+     and HPF sliders are automatically remapped to preserve the same frequency in Hz
+     (VCF remapping only applies when Classic VCF Frq Scale is enabled, since both
+     modes share the same curve otherwise). Other sliders like attack, decay, and
+     LFO rate are re-interpreted through the new mode's parameter curves and will
+     sound different at the same slider position.</p>
+  <p>The HPF slider is automatically remapped when switching modes: Juno-106 switch
+     positions 0-3 map to the closest Juno-6 continuous positions (0/flat maps to 0,
+     position 2 maps to 0.685, position 3 maps to 2.202) so the bass character is
+     preserved. Note: the Juno-6 has no bass boost mode, so switching from Juno-106
+     bass boost to Juno-6 and back will land on flat mode instead.</p>
+
+  </details>
 </main>
 
 <footer>

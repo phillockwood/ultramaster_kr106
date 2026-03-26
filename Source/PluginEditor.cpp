@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "BinaryData.h"
+#include "Controls/KR106QwertyDiagram.h"
 
 KR106Editor::KR106Editor(KR106AudioProcessor& p)
     : AudioProcessorEditor(p), mProcessor(p)
@@ -186,6 +187,7 @@ KR106Editor::KR106Editor(KR106AudioProcessor& p)
     mTooltip.setVisible(false);
     mTooltip.setAlwaysOnTop(true);
 
+
     startTimerHz(30);
 }
 
@@ -231,6 +233,7 @@ void KR106Editor::showSettingsMenu()
     items.push_back(KR106MenuItem::item(31, "VCF Oversample 4x", true, os == 4));
     items.push_back(KR106MenuItem::sep());
     items.push_back(KR106MenuItem::item(40, "Component Variance Editor"));
+    items.push_back(KR106MenuItem::item(41, "Keyboard Shortcuts"));
 
     mSettingsMenu = std::make_unique<KR106MenuSheet>(std::move(items), mMenuTypeface,
         [this](int r)
@@ -283,6 +286,8 @@ void KR106Editor::showSettingsMenu()
             }
             if (r == 40)
                 showVarianceSheet();
+            if (r == 41)
+                showQwertyDiagram();
             mProcessor.saveGlobalSettings();
         });
 
@@ -315,26 +320,85 @@ void KR106Editor::showVarianceSheet()
     mVarianceSheet->showAt({ sheetX, sheetY, sheetW, sheetH });
 }
 
+void KR106Editor::showQwertyDiagram()
+{
+    if (mQwertyDiagram) return;
+
+    // Transparent overlay covers the whole window to catch clicks anywhere
+    struct Overlay : public juce::Component {
+        std::function<void()> onClose;
+        KR106QwertyDiagram diagram;
+        Overlay() { addAndMakeVisible(diagram); }
+        void mouseDown(const juce::MouseEvent&) override { if (onClose) onClose(); }
+        void resized() override {
+            int w = 386, h = 120;
+            diagram.setBounds((getWidth() - w) / 2, (getHeight() - h) / 2, w, h);
+        }
+    };
+
+    auto* overlay = new Overlay();
+    overlay->onClose = [this]() { mQwertyDiagram.reset(); };
+    overlay->diagram.onClose = [this]() { mQwertyDiagram.reset(); };
+    overlay->setBounds(getLocalBounds());
+    overlay->setAlwaysOnTop(true);
+    addAndMakeVisible(overlay);
+    mQwertyDiagram.reset(overlay);
+}
+
 int KR106Editor::qwertyToNote(int keyCode) const
 {
-    // Chromatic layout: A=C, W=C#, S=D, E=D#, D=E, F=F, T=F#, G=G, Y=G#, H=A, U=A#, J=B, K=C+1, O=C#+1, L=D+1
+    // Standard piano layout: two octaves + extensions on all rows.
+    // Lower octave (Z row naturals + A row sharps):
+    //   Z=C  S=C#  X=D  D=D#  C=E  V=F  G=F#  B=G  H=G#  N=A  J=A#  M=B
+    //   ,=C+1  L=C#+1  .=D+1  ;=D#+1  /=E+1  '=F+1
+    // Upper octave (Q row naturals + number row sharps):
+    //   Q=C  2=C#  W=D  3=D#  E=E  R=F  5=F#  T=G  6=G#  Y=A  7=A#  U=B
+    //   I=C+1  9=C#+1  O=D+1  0=D#+1  P=E+1  [=F+1  ]=F#+1  \=G+1  ==G#+1
     switch (keyCode)
     {
-        case 'A': return mQwertyBase;
-        case 'W': return mQwertyBase + 1;
-        case 'S': return mQwertyBase + 2;
-        case 'E': return mQwertyBase + 3;
-        case 'D': return mQwertyBase + 4;
-        case 'F': return mQwertyBase + 5;
-        case 'T': return mQwertyBase + 6;
-        case 'G': return mQwertyBase + 7;
-        case 'Y': return mQwertyBase + 8;
-        case 'H': return mQwertyBase + 9;
-        case 'U': return mQwertyBase + 10;
-        case 'J': return mQwertyBase + 11;
-        case 'K': return mQwertyBase + 12;
-        case 'O': return mQwertyBase + 13;
-        case 'L': return mQwertyBase + 14;
+        // Lower octave naturals (Z row)
+        case 'Z': return mQwertyBase;
+        case 'X': return mQwertyBase + 2;
+        case 'C': return mQwertyBase + 4;
+        case 'V': return mQwertyBase + 5;
+        case 'B': return mQwertyBase + 7;
+        case 'N': return mQwertyBase + 9;
+        case 'M': return mQwertyBase + 11;
+        case ',': return mQwertyBase + 12;
+        case '.': return mQwertyBase + 14;
+        case '/': return mQwertyBase + 16;
+        // Lower octave sharps (A row)
+        case 'S': return mQwertyBase + 1;
+        case 'D': return mQwertyBase + 3;
+        case 'G': return mQwertyBase + 6;
+        case 'H': return mQwertyBase + 8;
+        case 'J': return mQwertyBase + 10;
+        case 'L': return mQwertyBase + 13;
+        case ';': return mQwertyBase + 15;
+        case '\'': return mQwertyBase + 17;
+        // Upper octave naturals (Q row)
+        case 'Q': return mQwertyBase + 12;
+        case 'W': return mQwertyBase + 14;
+        case 'E': return mQwertyBase + 16;
+        case 'R': return mQwertyBase + 17;
+        case 'T': return mQwertyBase + 19;
+        case 'Y': return mQwertyBase + 21;
+        case 'U': return mQwertyBase + 23;
+        case 'I': return mQwertyBase + 24;
+        case 'O': return mQwertyBase + 26;
+        case 'P': return mQwertyBase + 28;
+        case '[': return mQwertyBase + 29;
+        case ']': return mQwertyBase + 31;
+        // Upper octave sharps (number row)
+        case '2': return mQwertyBase + 13;
+        case '3': return mQwertyBase + 15;
+        case '5': return mQwertyBase + 18;
+        case '6': return mQwertyBase + 20;
+        case '7': return mQwertyBase + 22;
+        case '9': return mQwertyBase + 25;
+        case '0': return mQwertyBase + 27;
+        case '-': return mQwertyBase + 30;
+        case '=': return mQwertyBase + 32;
         default:  return -1;
     }
 }
@@ -386,54 +450,9 @@ bool KR106Editor::keyPressed(const juce::KeyPress& key)
     // Enter: open preset sheet
     if (key == juce::KeyPress::returnKey) { mPresetDisplay->openPresetSheet(); return true; }
 
-    // P: toggle patch bank view
-    if (code == 'P') { mScope->togglePatchBank(); return true; }
-
-    // Z/X: octave shift
-    if (code == 'Z') { mQwertyBase = juce::jmax(0, mQwertyBase - 12);  qwertyAllNotesOff(); return true; }
-    if (code == 'X') { mQwertyBase = juce::jmin(108, mQwertyBase + 12); qwertyAllNotesOff(); return true; }
-
-    // 1-9: toggle panel buttons
-    if (code >= '1' && code <= '9')
-    {
-        int idx = code - '1';
-
-        // 7/8/9: chorus buttons need special handling (mutual interaction)
-        if (idx == 6) // '7' = Chorus Off: turn off both I and II
-        {
-            auto setParam = [&](int pid, float v) {
-                auto* p = mProcessor.getParam(pid);
-                p->beginChangeGesture();
-                p->setValueNotifyingHost(v);
-                p->endChangeGesture();
-            };
-            setParam(kChorusI, 0.f);
-            setParam(kChorusII, 0.f);
-            return true;
-        }
-        if (idx == 7 || idx == 8) // '8' = Chorus I, '9' = Chorus II: toggle
-        {
-            int pid = (idx == 7) ? kChorusI : kChorusII;
-            auto* p = mProcessor.getParam(pid);
-            float next = (p->getValue() > 0.5f) ? 0.f : 1.f;
-            p->beginChangeGesture();
-            p->setValueNotifyingHost(next);
-            p->endChangeGesture();
-            return true;
-        }
-
-        static constexpr int kButtonMap[] = {
-            kTranspose, kHold, kArpeggio,
-            kDcoPulse, kDcoSaw, kDcoSubSw
-        };
-        auto* p = mProcessor.getParam(kButtonMap[idx]);
-        double cur = p->getValue();
-        double next = (cur > 0.5) ? 0.0 : 1.0;
-        p->beginChangeGesture();
-        p->setValueNotifyingHost(static_cast<float>(next));
-        p->endChangeGesture();
-        return true;
-    }
+    // `/1: octave shift
+    if (code == '`' || code == 0x60) { mQwertyBase = juce::jmax(0, mQwertyBase - 12);  qwertyAllNotesOff(); return true; }
+    if (code == '1')                 { mQwertyBase = juce::jmin(108, mQwertyBase + 12); qwertyAllNotesOff(); return true; }
 
     // QWERTY note keys
     int note = qwertyToNote(code);
@@ -465,33 +484,62 @@ bool KR106Editor::keyPressed(const juce::KeyPress& key)
 
 bool KR106Editor::keyStateChanged(bool /*isKeyDown*/)
 {
-    // Check for released QWERTY keys
+    // Check for released QWERTY keys.
+    // Multiple keys can map to the same note (overlapping octaves),
+    // so check all keys that produce this note and only release if
+    // none of them are held.
+    static constexpr int kNoteKeys[][3] = {
+        // offset: up to 3 key codes that produce base+offset (0 = end)
+        /* 0  C   */ {'Z', 0, 0},
+        /* 1  C#  */ {'S', 0, 0},
+        /* 2  D   */ {'X', 0, 0},
+        /* 3  D#  */ {'D', 0, 0},
+        /* 4  E   */ {'C', 0, 0},
+        /* 5  F   */ {'V', 0, 0},
+        /* 6  F#  */ {'G', 0, 0},
+        /* 7  G   */ {'B', 0, 0},
+        /* 8  G#  */ {'H', 0, 0},
+        /* 9  A   */ {'N', 0, 0},
+        /* 10 A#  */ {'J', 0, 0},
+        /* 11 B   */ {'M', 0, 0},
+        /* 12 C+1 */ {'Q', ',', 0},
+        /* 13 C#+1*/ {'2', 'L', 0},
+        /* 14 D+1 */ {'W', '.', 0},
+        /* 15 D#+1*/ {'3', ';', 0},
+        /* 16 E+1 */ {'E', '/', 0},
+        /* 17 F+1 */ {'R', '\'', 0},
+        /* 18 F#+1*/ {'5', 0, 0},
+        /* 19 G+1 */ {'T', 0, 0},
+        /* 20 G#+1*/ {'6', 0, 0},
+        /* 21 A+1 */ {'Y', 0, 0},
+        /* 22 A#+1*/ {'7', 0, 0},
+        /* 23 B+1 */ {'U', 0, 0},
+        /* 24 C+2 */ {'I', 0, 0},
+        /* 25 C#+2*/ {'9', 0, 0},
+        /* 26 D+2 */ {'O', 0, 0},
+        /* 27 D#+2*/ {'0', 0, 0},
+        /* 28 E+2 */ {'P', 0, 0},
+        /* 29 F+2 */ {'[', 0, 0},
+        /* 30 F#+2*/ {'-', 0, 0},
+        /* 31 G+2 */ {']', 0, 0},
+        /* 32 G#+2*/ {'=', 0, 0},
+    };
+    static constexpr int kMaxOffset = 32;
+
     bool handled = false;
     for (int i = 0; i < 128; i++)
     {
         if (!mQwertyDown[i]) continue;
-        int code = -1;
         int offset = i - mQwertyBase;
-        switch (offset)
-        {
-            case 0:  code = 'A'; break;
-            case 1:  code = 'W'; break;
-            case 2:  code = 'S'; break;
-            case 3:  code = 'E'; break;
-            case 4:  code = 'D'; break;
-            case 5:  code = 'F'; break;
-            case 6:  code = 'T'; break;
-            case 7:  code = 'G'; break;
-            case 8:  code = 'Y'; break;
-            case 9:  code = 'H'; break;
-            case 10: code = 'U'; break;
-            case 11: code = 'J'; break;
-            case 12: code = 'K'; break;
-            case 13: code = 'O'; break;
-            case 14: code = 'L'; break;
-            default: break;
-        }
-        if (code >= 0 && !juce::KeyPress::isKeyCurrentlyDown(code))
+        if (offset < 0 || offset > kMaxOffset) { mQwertyDown[i] = false; continue; }
+
+        // Check if any key for this note is still held
+        bool anyHeld = false;
+        for (int k = 0; k < 3 && kNoteKeys[offset][k] != 0; k++)
+            if (juce::KeyPress::isKeyCurrentlyDown(kNoteKeys[offset][k]))
+                anyHeld = true;
+
+        if (!anyHeld)
         {
             mQwertyDown[i] = false;
             mProcessor.sendMidiFromUI(0x80, static_cast<uint8_t>(i), 0);

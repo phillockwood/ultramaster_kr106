@@ -211,14 +211,14 @@ static double tickToSample(uint32_t tick, const MidiFile& mf, double sr)
 
 // --- WAV writer (stereo, 24-bit PCM) ---
 
-static void writeWav24Stereo(const char* filename, const float* L, const float* R,
-                              int numSamples, int sampleRate)
+static void writeWav(const char* filename, const float* L, const float* R,
+                     int numSamples, int sampleRate, bool mono, int bits)
 {
     FILE* f = fopen(filename, "wb");
     if (!f) { fprintf(stderr, "Error: cannot open %s\n", filename); return; }
 
-    int bytesPerSample = 3;
-    int channels = 2;
+    int bytesPerSample = bits / 8;
+    int channels = mono ? 1 : 2;
     int dataSize = numSamples * bytesPerSample * channels;
     int fileSize = 36 + dataSize;
 
@@ -235,15 +235,19 @@ static void writeWav24Stereo(const char* filename, const float* L, const float* 
     write32(sampleRate);
     write32(sampleRate * bytesPerSample * channels);
     write16(bytesPerSample * channels);
-    write16(24);
+    write16(bits);
     fwrite("data", 1, 4, f);
     write32(dataSize);
 
-    for (int i = 0; i < numSamples; i++)
-    {
-        for (int ch = 0; ch < 2; ch++)
+    auto writeSample = [&](float s) {
+        s = std::clamp(s, -1.f, 1.f);
+        if (bits == 16)
         {
-            float s = std::clamp(ch == 0 ? L[i] : R[i], -1.f, 1.f);
+            int16_t v = static_cast<int16_t>(s * 32767.f);
+            fwrite(&v, 2, 1, f);
+        }
+        else
+        {
             int32_t v = static_cast<int32_t>(s * 8388607.f);
             uint8_t bytes[3] = {
                 static_cast<uint8_t>(v & 0xFF),
@@ -252,11 +256,22 @@ static void writeWav24Stereo(const char* filename, const float* L, const float* 
             };
             fwrite(bytes, 1, 3, f);
         }
+    };
+
+    for (int i = 0; i < numSamples; i++)
+    {
+        if (mono)
+            writeSample((L[i] + R[i]) * 0.5f);
+        else
+        {
+            writeSample(L[i]);
+            writeSample(R[i]);
+        }
     }
 
     fclose(f);
-    fprintf(stderr, "Wrote %s: %d samples, %d Hz, 24-bit stereo (%.1f sec)\n",
-            filename, numSamples, sampleRate, numSamples / (float)sampleRate);
+    fprintf(stderr, "Wrote %s: %d samples, %d Hz, %d-bit %s (%.1f sec)\n",
+            filename, numSamples, sampleRate, bits, mono ? "mono" : "stereo", numSamples / (float)sampleRate);
 }
 
 // --- DSP parameter dispatch ---
@@ -306,13 +321,23 @@ int main(int argc, char* argv[])
 {
     if (argc < 2)
     {
-        fprintf(stderr, "Usage: render_midi input.mid [output.wav] [samplerate]\n");
+        fprintf(stderr, "Usage: render_midi input.mid [output.wav] [samplerate] [--mono] [--16bit]\n");
         return 1;
     }
 
+    // Check for flags anywhere in args
+    bool mono = false;
+    int bits = 24;
+    for (int i = 1; i < argc; i++)
+    {
+        if (strcmp(argv[i], "--mono") == 0) mono = true;
+        if (strcmp(argv[i], "--16bit") == 0) bits = 16;
+    }
+
+    auto isFlag = [](const char* s) { return s[0] == '-' && s[1] == '-'; };
     const char* inFile = argv[1];
-    const char* outFile = (argc > 2) ? argv[2] : "output.wav";
-    float sr = (argc > 3) ? static_cast<float>(atof(argv[3])) : 44100.f;
+    const char* outFile = (argc > 2 && !isFlag(argv[2])) ? argv[2] : "output.wav";
+    float sr = (argc > 3 && !isFlag(argv[3])) ? static_cast<float>(atof(argv[3])) : 44100.f;
 
     // Parse MIDI
     MidiFile mf;
@@ -427,6 +452,6 @@ int main(int argc, char* argv[])
         fprintf(stderr, "Normalized: gain=%.3f (%+.1f dB)\n", gain, 20.f * log10f(gain));
     }
 
-    writeWav24Stereo(outFile, outL.data(), outR.data(), numSamples, static_cast<int>(sr));
+    writeWav(outFile, outL.data(), outR.data(), numSamples, static_cast<int>(sr), mono, bits);
     return 0;
 }

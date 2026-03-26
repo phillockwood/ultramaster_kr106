@@ -53,6 +53,8 @@ private:
     juce::Typeface::Ptr mMenuTypeface;
     std::unique_ptr<KR106MenuSheet> mSettingsMenu;
     std::unique_ptr<KR106VarianceSheet> mVarianceSheet;
+    std::unique_ptr<juce::Component> mQwertyDiagram;
 
     void showVarianceSheet();
+    void showQwertyDiagram();
 };

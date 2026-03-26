@@ -497,7 +497,7 @@ private:
             int b0 = std::clamp(static_cast<int>(binF), 0, numBins - 2);
             float frac = binF - b0;
             float db = magnitudes[b0] + frac * (magnitudes[b0 + 1] - magnitudes[b0]);
-            db = std::clamp(db, kMinDb, kMaxDb);
+            db = std::clamp(db, kMinDb - 12.f, kMaxDb);
             return (1.f - (db - kMinDb) / kDbRange) * (h - 1);
         };
 
@@ -817,7 +817,7 @@ private:
             float denomSq = p8 + 2.f * k * p4 * cosf(theta4) + k2;
             float magSq = comp2 / denomSq;
             float db = 10.f * log10f(std::max(magSq, 1e-12f));
-            return std::clamp(db, kMinDb, kMaxDb);
+            return std::clamp(db, kMinDb - 12.f, kMaxDb);
         };
 
         auto dbToY = [&](float db) -> float {
