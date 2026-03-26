@@ -320,51 +320,21 @@ int KR106Editor::qwertyToNote(int keyCode) const
     // Chromatic layout: A=C, W=C#, S=D, E=D#, D=E, F=F, T=F#, G=G, Y=G#, H=A, U=A#, J=B, K=C+1, O=C#+1, L=D+1
     switch (keyCode)
     {
-        case 'A':
-        case 'a':
-            return mQwertyBase;
-        case 'W':
-        case 'w':
-            return mQwertyBase + 1;
-        case 'S':
-        case 's':
-            return mQwertyBase + 2;
-        case 'E':
-        case 'e':
-            return mQwertyBase + 3;
-        case 'D':
-        case 'd':
-            return mQwertyBase + 4;
-        case 'F':
-        case 'f':
-            return mQwertyBase + 5;
-        case 'T':
-        case 't':
-            return mQwertyBase + 6;
-        case 'G':
-        case 'g':
-            return mQwertyBase + 7;
-        case 'Y':
-        case 'y':
-            return mQwertyBase + 8;
-        case 'H':
-        case 'h':
-            return mQwertyBase + 9;
-        case 'U':
-        case 'u':
-            return mQwertyBase + 10;
-        case 'J':
-        case 'j':
-            return mQwertyBase + 11;
-        case 'K':
-        case 'k':
-            return mQwertyBase + 12;
-        case 'O':
-        case 'o':
-            return mQwertyBase + 13;
-        case 'L':
-        case 'l':
-            return mQwertyBase + 14;
+        case 'A': return mQwertyBase;
+        case 'W': return mQwertyBase + 1;
+        case 'S': return mQwertyBase + 2;
+        case 'E': return mQwertyBase + 3;
+        case 'D': return mQwertyBase + 4;
+        case 'F': return mQwertyBase + 5;
+        case 'T': return mQwertyBase + 6;
+        case 'G': return mQwertyBase + 7;
+        case 'Y': return mQwertyBase + 8;
+        case 'H': return mQwertyBase + 9;
+        case 'U': return mQwertyBase + 10;
+        case 'J': return mQwertyBase + 11;
+        case 'K': return mQwertyBase + 12;
+        case 'O': return mQwertyBase + 13;
+        case 'L': return mQwertyBase + 14;
         default:  return -1;
     }
 }
@@ -385,6 +355,11 @@ void KR106Editor::qwertyAllNotesOff()
 bool KR106Editor::keyPressed(const juce::KeyPress& key)
 {
     int code = key.getKeyCode();
+    // Ignore case
+    if (code >= 'a' && code <= 'z')
+    {
+        code -= 'a' - 'A';
+    }
 
     // Left/right arrows: cycle scope modes
     if (key == juce::KeyPress::leftKey)  { mScope->cycleMode(-1); return true; }
