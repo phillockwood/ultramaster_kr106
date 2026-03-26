@@ -41,8 +41,10 @@ ipch/
 *.wav
 *.mp3
 
-# ROM analysis (copyrighted data)
+# Copyrighted materials
 resources/106rom/
+docs/manuals/
+docs/factory_preset_recordings/
 
 # Website
 docs/website/makefile
