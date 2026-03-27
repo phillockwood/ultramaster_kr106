@@ -237,15 +237,15 @@ struct VCF
   // 44.1 kHz and 96 kHz showing < 60 cent divergence vs 500+ cents
   // when compensating frq directly.
   //
-  // Coefficients fit to empirical data from tools/vcf-analyze: unit
-  // impulse response FFT (-3dB cutoff at R=0.0/0.3/0.5) and resonance
-  // peak frequency (parabolic interpolation at R=0.7/0.8, zero-crossing
-  // at R=0.9+), swept across frq=0.04–0.80 with compensation disabled.
-  // Target data in tools/vcf-analyze/compensation_targets.csv.
-
+  // Coefficients fit to hardware Juno-106 resonance peak frequencies
+  // (noise through VCF, test mode 3, KBD=max, 6 resonance values ×
+  // 6 notes C2–C7) compared against model output. Previous coefficients
+  // undercompensated at moderate resonance (R=25–101) due to the max()
+  // floor engaging too early.
   static float FreqCompensation(float k)
   {
-      return std::max((1.96f + 1.06f * k) / (1.f + 2.16f * k), 1.f);
+    float fc = 1.962f / (1.f + 0.197f * k);
+    return std::max(fc, 1.f);
   }
 
   // Soft-clip resonance above k=3.0 (OTA gain compression at high feedback).
@@ -264,7 +264,7 @@ struct VCF
   // the input, counteracting passband volume drop.
   static float InputComp(float k)
   {
-    return 1.f + k * 0.45f;
+      return 0.252f + 0.058f * k;
   }
 
   static constexpr float kOTAScale = 0.35f;
@@ -444,7 +444,13 @@ private:
     for (auto& st : mS)
       if (fabsf(st) < 1e-15f) st = 0.f;
 
-    return lp4;
+    // Output gain: InputComp scales the input to ~0.25 at k=0 so that
+    // passband signals stay in the OTA linear region (matching the Juno's
+    // low-level noise/oscillator drive). Self-oscillation amplitude is set
+    // by kFbScale and is independent of input scaling. This gain restores
+    // self-oscillation to ±0.5 (1V peak-to-peak), matching the voice
+    // signal levels expected downstream by the VCA and chorus stages.
+    return lp4 * 4.85f;
   }
 };
 
