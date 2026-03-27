@@ -376,49 +376,42 @@ private:
 
         paintCrosshairs(g, w, h, dim);
 
-        // Waveform -- one full period interpolated to fill the display width
+        // Waveform -- one full period interpolated, smooth 2px path
         if (mHasData && mDisplayLen > 1)
         {
-            // R channel (dimmer, drawn first so L overlays it)
-            g.setColour(dim);
-            int lastYR = static_cast<int>((mDisplayR[0] / scale) * -v2 + v2);
-            for (int i = 0; i < w; i++)
-            {
-                float pos = static_cast<float>(i) / static_cast<float>(w) * mDisplayLen;
+            auto interpY = [&](const float* buf, float px) -> float {
+                float pos = px / w * mDisplayLen;
                 int s0 = static_cast<int>(pos);
                 float frac = pos - s0;
                 if (s0 >= mDisplayLen - 1) { s0 = mDisplayLen - 2; frac = 1.f; }
+                float sample = buf[s0] + frac * (buf[s0 + 1] - buf[s0]);
+                return (sample / scale) * -v2 + v2;
+            };
 
-                float sample = mDisplayR[s0] + frac * (mDisplayR[s0 + 1] - mDisplayR[s0]);
-                int y = static_cast<int>((sample / scale) * -v2 + v2);
-
-                int y1 = std::min(lastYR, y);
-                int y2 = std::max(lastYR, y) + 1;
-                g.fillRect(static_cast<float>(i), static_cast<float>(y1),
-                           1.f, static_cast<float>(y2 - y1));
-                lastYR = y;
+            // R channel (dimmer, drawn first so L overlays it)
+            {
+                juce::Path pathR;
+                pathR.startNewSubPath(0.f, interpY(mDisplayR, 0.f));
+                for (float px = 0.5f; px < w; px += 0.5f)
+                    pathR.lineTo(px, interpY(mDisplayR, px));
+                g.setColour(dim);
+                g.strokePath(pathR, juce::PathStrokeType(1.5f));
             }
 
-            // L channel (bright, on top)
+            // L channel (bright, on top) + peak measurement
             float peakL = 0.f;
-            g.setColour(bright);
-            int lastY = static_cast<int>((mDisplay[0] / scale) * -v2 + v2);
-            for (int i = 0; i < w; i++)
             {
-                float pos = static_cast<float>(i) / static_cast<float>(w) * mDisplayLen;
-                int s0 = static_cast<int>(pos);
-                float frac = pos - s0;
-                if (s0 >= mDisplayLen - 1) { s0 = mDisplayLen - 2; frac = 1.f; }
-
-                float sample = mDisplay[s0] + frac * (mDisplay[s0 + 1] - mDisplay[s0]);
-                peakL = std::max(peakL, fabsf(sample));
-                int y = static_cast<int>((sample / scale) * -v2 + v2);
-
-                int y1 = std::min(lastY, y);
-                int y2 = std::max(lastY, y) + 1;
-                g.fillRect(static_cast<float>(i), static_cast<float>(y1),
-                           1.f, static_cast<float>(y2 - y1));
-                lastY = y;
+                juce::Path pathL;
+                pathL.startNewSubPath(0.f, interpY(mDisplay, 0.f));
+                for (float px = 0.5f; px < w; px += 0.5f)
+                {
+                    float y = interpY(mDisplay, px);
+                    pathL.lineTo(px, y);
+                    float sample = (v2 - y) / v2 * scale;
+                    peakL = std::max(peakL, fabsf(sample));
+                }
+                g.setColour(bright);
+                g.strokePath(pathL, juce::PathStrokeType(1.5f));
             }
 
             // Peak amplitude readout (bottom-right corner)
@@ -524,218 +517,213 @@ private:
             specPath.lineTo(px, specYf(px));
 
         g.setColour(bright);
-        g.strokePath(specPath, juce::PathStrokeType(0.75f));
+        g.strokePath(specPath, juce::PathStrokeType(0.5f));
     }
 
-    // ---- ADSR envelope display (split view) ----
-    // Top half: ADS (attack + decay + sustain fill)
-    // Bottom half: SR (sustain fill + release curve)
-    // Both halves use a fixed 15s time window.
+    // ---- ADSR envelope display (single continuous curve, dynamic zoom) ----
+    // Shows Attack + Decay + 1s Sustain hold + Release in one view.
+    // Time axis scales to fit the full envelope. Ticks at bottom, 1/sec.
     void paintADSR(juce::Graphics& g, int w, int h,
                    juce::Colour dim, juce::Colour mid, juce::Colour bright)
     {
         if (!mProcessor) return;
 
-        using DSP = KR106DSP<float>;
         auto& dsp = mProcessor->mDSP;
-
-        // --- Read ADSR parameters ---
         bool j6 = (dsp.mAdsrMode == 0);
         float sustain = std::max(mProcessor->getParam(kEnvS)->getValue(), 0.001f);
 
-        // Constants matching KR106ADSR.h
-        static constexpr float kAttackTarget    = 1.2f;
-        static constexpr float kReleaseTarget   = -0.1f;
-        static constexpr float kWindowMs        = 6000.f;
+        static constexpr float kAttackTarget  = 1.2f;
+        static constexpr float kReleaseTarget = -0.1f;
+        static constexpr float kSustainMs     = 1000.f; // 1s sustain hold
+        static constexpr float kThreshold     = 0.01f;  // 1% for "reached" detection
 
         using ADSR = kr106::ADSR;
 
-        // Compute times and coefficients per mode
-        float attackMs;
+        // --- Compute phase durations ---
+        float attackMs = 0.f, decayMs = 0.f, releaseMs = 0.f;
         float attackCoeff = 0.f, decayCoeff = 0.f, releaseCoeff = 0.f;
 
         if (j6)
         {
-            // Juno-6: tau in seconds (must match KR106_DSP_SetParam.h)
-            float attackTau  = 0.001500f * std::exp(11.7382f * dsp.mSliderA + -4.7207f * dsp.mSliderA * dsp.mSliderA);
-            float decayTau   = 0.003577f * std::exp(12.9460f * dsp.mSliderD + -5.0638f * dsp.mSliderD * dsp.mSliderD);
-            float releaseTau = 0.003577f * std::exp(12.9460f * dsp.mSliderR + -5.0638f * dsp.mSliderR * dsp.mSliderR);
+            float attackTau  = 0.001500f * expf(11.7382f * dsp.mSliderA - 4.7207f * dsp.mSliderA * dsp.mSliderA);
+            float decayTau   = 0.003577f * expf(12.9460f * dsp.mSliderD - 5.0638f * dsp.mSliderD * dsp.mSliderD);
+            float releaseTau = 0.003577f * expf(12.9460f * dsp.mSliderR - 5.0638f * dsp.mSliderR * dsp.mSliderR);
 
-            // Per-ms coefficients (matching ADSR per-sample coeff but at 1kHz)
             attackCoeff  = 1.f - expf(-0.001f / attackTau);
             decayCoeff   = 1.f - expf(-0.001f / decayTau);
             releaseCoeff = 1.f - expf(-0.001f / releaseTau);
 
-            // Approximate completion times for phase boundaries
+            // Attack: time for RC charge toward 1.2 to reach 1.0
             attackMs = -logf(1.f - 1.f / kAttackTarget) / -logf(1.f - attackCoeff);
+            // Decay: time for exponential from 1.0 to within threshold of sustain
+            if (sustain < 1.f - kThreshold)
+                decayMs = logf(kThreshold) / logf(1.f - decayCoeff);
+            // Release: time for exponential from sustain toward -0.1 to reach threshold
+            float relRange = sustain - kReleaseTarget;
+            if (relRange > kThreshold)
+                releaseMs = logf(kThreshold / relRange) / logf(1.f - releaseCoeff);
         }
         else
         {
-            // Juno-106: times from ROM integer simulation
-            attackMs  = ADSR::AttackMs(dsp.mSliderA);
-        }
+            attackMs = ADSR::AttackMs(dsp.mSliderA);
 
-        // --- Layout ---
-        int hTop = h / 2;
-        int hBot = h - hTop - 1; // 1px divider
-        int yDivider = hTop;
-        int yBotStart = hTop + 1;
-
-        // Horizontal divider line with tick marks
-        g.setColour(cGrid());
-        g.fillRect(0.f, static_cast<float>(yDivider), static_cast<float>(w), 1.f);
-        int halfSecs = static_cast<int>(kWindowMs / 500.f);
-        for (int hs = 1; hs < halfSecs; hs++)
-        {
-            float tx = std::round(hs * 500.f / kWindowMs * (w - 1));
-            bool major = (hs % 2 == 0); // whole seconds are major
-            float tickH = major ? 5.f : 3.f;
-            g.fillRect(tx, static_cast<float>(yDivider) - (tickH - 1.f) / 2.f, 1.f, tickH);
-        }
-
-        // Phase boundary: A|D (top half)
-        float xAD = std::round(std::min(attackMs / kWindowMs, 1.f) * (w - 1));
-        g.setColour(cGrid());
-        if (xAD > 0.f && xAD < w - 1)
-            g.fillRect(xAD, 0.f, 1.f, static_cast<float>(hTop));
-
-        // --- Draw envelope curves ---
-        if (j6)
-        {
-            // J6: analytical per-ms evaluation using RC coefficients
-            auto evalEnv = [&](float ms, int phase) -> float
-            {
-                float env = 0.f;
-                if (phase == 0)
-                {
-                    env = kAttackTarget * (1.f - powf(1.f - attackCoeff, ms));
-                    if (env > 1.f) env = 1.f;
-                }
-                else if (phase == 1)
-                    env = sustain + (1.f - sustain) * powf(1.f - decayCoeff, ms);
-                else
-                {
-                    env = kReleaseTarget + (sustain - kReleaseTarget) * powf(1.f - releaseCoeff, ms);
-                    if (env < 0.f) env = 0.f;
-                }
-                return std::clamp(env, 0.f, 1.f);
-            };
-
-            // Top half: attack + decay
-            g.setColour(bright);
-            int lastY = hTop - 1;
-            for (int px = 0; px < w; px++)
-            {
-                float ms = (static_cast<float>(px) / static_cast<float>(w - 1)) * kWindowMs;
-                float env = (ms < attackMs) ? evalEnv(ms, 0) : evalEnv(ms - attackMs, 1);
-                int y = static_cast<int>(std::round((1.f - env) * (hTop - 1)));
-                int y1 = std::min(lastY, y), y2 = std::max(lastY, y) + 1;
-                g.fillRect(static_cast<float>(px), static_cast<float>(y1),
-                           1.f, static_cast<float>(y2 - y1));
-                lastY = y;
-            }
-
-            // Bottom half: release starting from left edge
-            lastY = static_cast<int>(std::round((1.f - sustain) * (hBot - 1)));
-            for (int px = 0; px < w; px++)
-            {
-                float ms = (static_cast<float>(px) / static_cast<float>(w - 1)) * kWindowMs;
-                float env = evalEnv(ms, 2);
-                int y = static_cast<int>(std::round((1.f - env) * (hBot - 1)));
-                int y1 = std::min(lastY, y), y2 = std::max(lastY, y) + 1;
-                g.fillRect(static_cast<float>(px), static_cast<float>(y1 + yBotStart),
-                           1.f, static_cast<float>(y2 - y1));
-                lastY = y;
-            }
-        }
-        else
-        {
-            // 106: integer simulation at tick rate, interpolated to pixels
+            // Simulate decay to find completion time
             int decIdx = std::clamp(static_cast<int>(dsp.mSliderD * 127.f + 0.5f), 0, 127);
-            int relIdx = std::clamp(static_cast<int>(dsp.mSliderR * 127.f + 0.5f), 0, 127);
-
-            uint16_t atkInc  = ADSR::AttackIncFromSlider(dsp.mSliderA);
-            uint16_t decCoeff = kr106::kDecRelTable[decIdx];
-            uint16_t relCoeff = kr106::kDecRelTable[relIdx];
+            uint16_t decCoeffI = kr106::kDecRelTable[decIdx];
             uint16_t susI = static_cast<uint16_t>(sustain * ADSR::kEnvMax);
-
-            static constexpr int kMaxTicks = 1429; // 6s / 4.2ms
-            float topCurve[kMaxTicks + 1];
-            float botCurve[kMaxTicks + 1];
-
-            // Simulate attack + decay (top half)
             {
-                uint16_t envI = 0;
-                bool attacking = true;
-                for (int t = 0; t <= kMaxTicks; t++)
+                uint16_t diff = ADSR::kEnvMax - susI;
+                int ticks = 0;
+                while (diff > static_cast<uint16_t>(ADSR::kEnvMax * kThreshold) && ticks < 50000)
                 {
-                    topCurve[t] = static_cast<float>(envI) / ADSR::kEnvMax;
-                    if (attacking)
-                    {
-                        uint32_t sum = static_cast<uint32_t>(envI) + atkInc;
-                        if (sum >= ADSR::kEnvMax) { envI = ADSR::kEnvMax; attacking = false; }
-                        else envI = static_cast<uint16_t>(sum);
-                    }
-                    else
-                    {
-                        if (envI > susI)
-                        {
-                            uint16_t diff = envI - susI;
-                            diff = ADSR::CalcDecay(diff, decCoeff);
-                            envI = diff + susI;
-                        }
-                        else
-                            envI = susI;
-                    }
+                    diff = ADSR::CalcDecay(diff, decCoeffI);
+                    ticks++;
                 }
+                decayMs = ticks * 1000.f / ADSR::kTickRate;
             }
 
-            // Simulate release from sustain (bottom half)
+            // Simulate release to find completion time
+            int relIdx = std::clamp(static_cast<int>(dsp.mSliderR * 127.f + 0.5f), 0, 127);
+            uint16_t relCoeffI = kr106::kDecRelTable[relIdx];
             {
                 uint16_t envI = susI;
-                for (int t = 0; t <= kMaxTicks; t++)
+                int ticks = 0;
+                while (envI > static_cast<uint16_t>(ADSR::kEnvMax * kThreshold) && ticks < 50000)
                 {
-                    botCurve[t] = static_cast<float>(envI) / ADSR::kEnvMax;
-                    envI = ADSR::CalcDecay(envI, relCoeff);
+                    envI = ADSR::CalcDecay(envI, relCoeffI);
+                    ticks++;
+                }
+                releaseMs = ticks * 1000.f / ADSR::kTickRate;
+            }
+        }
+
+        // Total time window with 10% padding, minimum 500ms
+        float totalMs = attackMs + decayMs + kSustainMs + releaseMs;
+        float windowMs = std::max(500.f, totalMs * 1.1f);
+
+        // Phase boundary positions in ms
+        float msAD   = attackMs;                          // attack -> decay
+        float msDS   = attackMs + decayMs;                // decay -> sustain hold
+        float msSR   = attackMs + decayMs + kSustainMs;   // sustain -> release
+
+        // --- Bottom tick marks (1 per second) ---
+        g.setColour(cGrid());
+        int numSecs = static_cast<int>(windowMs / 1000.f);
+        for (int s = 1; s <= numSecs; s++)
+        {
+            float tx = std::round(s * 1000.f / windowMs * (w - 1));
+            if (tx > 0.f && tx < w)
+                g.fillRect(tx, static_cast<float>(h - 3), 1.f, 3.f);
+        }
+
+        // Phase boundary lines (full height, grid color)
+        auto drawBoundary = [&](float ms) {
+            float x = std::round(ms / windowMs * (w - 1));
+            if (x > 0.f && x < w - 1)
+                g.fillRect(x, 0.f, 1.f, static_cast<float>(h));
+        };
+        drawBoundary(msAD);
+        drawBoundary(msDS);
+        drawBoundary(msSR);
+
+        // --- Evaluate envelope at a given ms offset from note-on ---
+        if (j6)
+        {
+            auto evalJ6 = [&](float ms) -> float
+            {
+                if (ms < msAD)
+                {
+                    float env = kAttackTarget * (1.f - powf(1.f - attackCoeff, ms));
+                    return std::min(env, 1.f);
+                }
+                if (ms < msDS)
+                    return sustain + (1.f - sustain) * powf(1.f - decayCoeff, ms - msAD);
+                if (ms < msSR)
+                    return sustain;
+                float t = ms - msSR;
+                float env = kReleaseTarget + (sustain - kReleaseTarget) * powf(1.f - releaseCoeff, t);
+                return std::max(env, 0.f);
+            };
+
+            juce::Path envPath;
+            envPath.startNewSubPath(0.f, 1.f + (1.f - std::clamp(evalJ6(0.f), 0.f, 1.f)) * (h - 3));
+            for (float px = 0.5f; px < w; px += 0.5f)
+            {
+                float ms = (px / (w - 1)) * windowMs;
+                float env = std::clamp(evalJ6(ms), 0.f, 1.f);
+                envPath.lineTo(px, 1.f + (1.f - env) * (h - 3));
+            }
+            g.setColour(bright);
+            g.strokePath(envPath, juce::PathStrokeType(1.5f));
+        }
+        else
+        {
+            // J106: simulate full ADSR as one continuous curve
+            int decIdx = std::clamp(static_cast<int>(dsp.mSliderD * 127.f + 0.5f), 0, 127);
+            int relIdx = std::clamp(static_cast<int>(dsp.mSliderR * 127.f + 0.5f), 0, 127);
+            uint16_t atkInc   = ADSR::AttackIncFromSlider(dsp.mSliderA);
+            uint16_t decCoeffI = kr106::kDecRelTable[decIdx];
+            uint16_t relCoeffI = kr106::kDecRelTable[relIdx];
+            uint16_t susI = static_cast<uint16_t>(sustain * ADSR::kEnvMax);
+
+            int maxTicks = static_cast<int>(windowMs * ADSR::kTickRate / 1000.f) + 2;
+            int sustainStartTick = static_cast<int>(msDS * ADSR::kTickRate / 1000.f);
+            int sustainEndTick   = static_cast<int>(msSR * ADSR::kTickRate / 1000.f);
+
+            std::vector<float> curve(maxTicks + 1);
+            uint16_t envI = 0;
+            bool attacking = true;
+            bool inSustainHold = false;
+            for (int t = 0; t <= maxTicks; t++)
+            {
+                curve[t] = static_cast<float>(envI) / ADSR::kEnvMax;
+
+                if (t >= sustainEndTick)
+                {
+                    // Release phase
+                    envI = ADSR::CalcDecay(envI, relCoeffI);
+                }
+                else if (t >= sustainStartTick)
+                {
+                    // Sustain hold (1s) -- stay at sustain level
+                    envI = susI;
+                }
+                else if (attacking)
+                {
+                    uint32_t sum = static_cast<uint32_t>(envI) + atkInc;
+                    if (sum >= ADSR::kEnvMax) { envI = ADSR::kEnvMax; attacking = false; }
+                    else envI = static_cast<uint16_t>(sum);
+                }
+                else
+                {
+                    // Decay toward sustain
+                    if (envI > susI)
+                    {
+                        uint16_t diff = envI - susI;
+                        diff = ADSR::CalcDecay(diff, decCoeffI);
+                        envI = diff + susI;
+                    }
+                    else
+                        envI = susI;
                 }
             }
 
-            // Draw top half using simulated curve
+            // Draw (interpolated between ticks, smooth 2px path)
+            auto envAtPx = [&](float px) -> float {
+                float ms = (px / (w - 1)) * windowMs;
+                float tickF = ms * ADSR::kTickRate / 1000.f;
+                int t0 = std::min(static_cast<int>(tickF), maxTicks - 1);
+                float frac = tickF - t0;
+                float env = curve[t0] + (curve[t0 + 1] - curve[t0]) * frac;
+                return 1.f + (1.f - std::clamp(env, 0.f, 1.f)) * (h - 3);
+            };
+
+            juce::Path envPath;
+            envPath.startNewSubPath(0.f, envAtPx(0.f));
+            for (float px = 0.5f; px < w; px += 0.5f)
+                envPath.lineTo(px, envAtPx(px));
             g.setColour(bright);
-            int lastY = hTop - 1;
-            for (int px = 0; px < w; px++)
-            {
-                float ms = (static_cast<float>(px) / static_cast<float>(w - 1)) * kWindowMs;
-                float tickF = ms * ADSR::kTickRate / 1000.f;
-                int t0 = std::min(static_cast<int>(tickF), kMaxTicks - 1);
-                float frac = tickF - t0;
-                float env = topCurve[t0] + (topCurve[t0 + 1] - topCurve[t0]) * frac;
-                env = std::clamp(env, 0.f, 1.f);
-
-                int y = static_cast<int>(std::round((1.f - env) * (hTop - 1)));
-                int y1 = std::min(lastY, y), y2 = std::max(lastY, y) + 1;
-                g.fillRect(static_cast<float>(px), static_cast<float>(y1),
-                           1.f, static_cast<float>(y2 - y1));
-                lastY = y;
-            }
-
-            // Draw bottom half: release starting from left edge
-            lastY = static_cast<int>(std::round((1.f - sustain) * (hBot - 1)));
-            for (int px = 0; px < w; px++)
-            {
-                float ms = (static_cast<float>(px) / static_cast<float>(w - 1)) * kWindowMs;
-                float tickF = ms * ADSR::kTickRate / 1000.f;
-                int t0 = std::min(static_cast<int>(tickF), kMaxTicks - 1);
-                float frac = tickF - t0;
-                float env = botCurve[t0] + (botCurve[t0 + 1] - botCurve[t0]) * frac;
-                env = std::clamp(env, 0.f, 1.f);
-
-                int y = static_cast<int>(std::round((1.f - env) * (hBot - 1)));
-                int y1 = std::min(lastY, y), y2 = std::max(lastY, y) + 1;
-                g.fillRect(static_cast<float>(px), static_cast<float>(y1 + yBotStart),
-                           1.f, static_cast<float>(y2 - y1));
-                lastY = y;
-            }
+            g.strokePath(envPath, juce::PathStrokeType(1.5f));
         }
     }
 
@@ -849,7 +837,7 @@ private:
             vcfPath.lineTo(px, dbToY(evalDb(px)));
 
         g.setColour(bright);
-        g.strokePath(vcfPath, juce::PathStrokeType(0.75f));
+        g.strokePath(vcfPath, juce::PathStrokeType(1.5f));
     }
 
     // ---- Frequency counter (zero-crossing measurement) ----
