@@ -82,22 +82,7 @@ jobs:
           cp -R "$ARTS/CLAP/Ultramaster KR-106.clap" pkg/
           cp -R "$ARTS/LV2/Ultramaster KR-106.lv2" pkg/
           cp -R "$ARTS/Standalone/Ultramaster KR-106.app" pkg/
-          cat > pkg/INSTALL.txt << 'EOF'
-          Ultramaster KR-106 — macOS Installation
-
-          Copy each item to the correct location:
-
-             Ultramaster KR-106.component  →  ~/Library/Audio/Plug-Ins/Components/
-             Ultramaster KR-106.vst3       →  ~/Library/Audio/Plug-Ins/VST3/
-             Ultramaster KR-106.clap       →  ~/Library/Audio/Plug-Ins/CLAP/
-             Ultramaster KR-106.lv2        →  ~/Library/Audio/Plug-Ins/LV2/
-             Ultramaster KR-106.app        →  /Applications/ (or anywhere you like)
-
-          The .component file is the AU (Audio Unit) plugin for Logic Pro,
-          GarageBand, and other AU-compatible hosts.
-
-          After copying, restart your DAW to scan for new plugins.
-          EOF
+          cp docs/README.md pkg/
           cd pkg && zip -r ../KR106-macOS.zip .
 
       - uses: actions/upload-artifact@v4
@@ -128,16 +113,7 @@ jobs:
           cp -R "$ARTS/CLAP/Ultramaster KR-106.clap" pkg/
           cp -R "$ARTS/LV2/Ultramaster KR-106.lv2" pkg/
           cp -R "$ARTS/Standalone/Ultramaster KR-106.exe" pkg/
-          cat > pkg/INSTALL.txt << 'EOF'
-          Ultramaster KR-106 — Windows Installation
-
-          VST3:       Copy the "Ultramaster KR-106.vst3" folder to C:\Program Files\Common Files\VST3\
-          CLAP:       Copy "Ultramaster KR-106.clap" to C:\Program Files\Common Files\CLAP\
-          LV2:        Copy the "Ultramaster KR-106.lv2" folder to C:\Program Files\Common Files\LV2\
-          Standalone: Put "Ultramaster KR-106.exe" anywhere you like.
-
-          After copying, restart your DAW to scan for new plugins.
-          EOF
+          cp docs/README.md pkg/
           cd pkg && 7z a ../KR106-Windows.zip .
 
       - uses: actions/upload-artifact@v4
@@ -177,16 +153,7 @@ jobs:
           cp -R "$ARTS/CLAP/Ultramaster KR-106.clap" pkg/
           cp -R "$ARTS/LV2/Ultramaster KR-106.lv2" pkg/
           cp -R "$ARTS/Standalone/Ultramaster KR-106" pkg/
-          cat > pkg/INSTALL.txt << 'EOF'
-          Ultramaster KR-106 — Linux Installation
-
-          VST3:       Copy the "Ultramaster KR-106.vst3" folder to ~/.vst3/
-          CLAP:       Copy "Ultramaster KR-106.clap" to ~/.clap/
-          LV2:        Copy the "Ultramaster KR-106.lv2" folder to ~/.lv2/
-          Standalone: Put "Ultramaster KR-106" anywhere on your PATH.
-
-          After copying, restart your DAW to scan for new plugins.
-          EOF
+          cp docs/README.md pkg/
           cd pkg && zip -r ../KR106-Linux.zip .
 
       - uses: actions/upload-artifact@v4
@@ -230,18 +197,7 @@ jobs:
           cp -R "$ARTS/CLAP/Ultramaster KR-106.clap" pkg/
           cp -R "$ARTS/LV2/Ultramaster KR-106.lv2" pkg/
           cp -R "$ARTS/Standalone/Ultramaster KR-106" pkg/
-          cat > pkg/INSTALL.txt << 'EOF'
-          Ultramaster KR-106 — Linux (ARM64) Installation
-
-          For Raspberry Pi and other ARM64 Linux systems.
-
-          VST3:       Copy the "Ultramaster KR-106.vst3" folder to ~/.vst3/
-          CLAP:       Copy "Ultramaster KR-106.clap" to ~/.clap/
-          LV2:        Copy the "Ultramaster KR-106.lv2" folder to ~/.lv2/
-          Standalone: Put "Ultramaster KR-106" anywhere on your PATH.
-
-          After copying, restart your DAW to scan for new plugins.
-          EOF
+          cp docs/README.md pkg/
           cd pkg && zip -r ../KR106-Linux-arm64.zip .
 
       - uses: actions/upload-artifact@v4
