@@ -489,21 +489,73 @@ public:
     return kTable[i0] + frac * (kTable[i0 + 1] - kTable[i0]);
   }
 
-  // dcoSubLevel_j60() - J60 sub level: linear pot + linear circuit.
-  // The J6 nonlinearity comes entirely from the A-taper pot. The J60 uses
-  // a 50KB linear pot, and the downstream circuit (inverting amp + transistor
-  // shunt + diode) is essentially linear. Scaled to match J6 max level.
-  // TODO: verify with J60 hardware measurements.
+  // dcoSubLevel_j60() — Juno-60 sub oscillator level scaling.
+  //
+  // CIRCUIT ANALYSIS (from service manual):
+  // The Juno-60 uses a diode shunt attenuator — not a VCA — to
+  // control sub oscillator level. This was a cost optimization:
+  // using BA662 VCAs for all 4 waveforms × 6 voices would have
+  // required 24 VCA chips.
+  //
+  // Signal path:
+  //   CMOS 4013 flip-flop (sub osc square wave)
+  //   -> R31 (68K) -> Q9 (2SA1015 PNP, emitter=GND)
+  //   -> Q9 collector -> D3 (1S2473) -> summing network
+  //
+  // Attenuation mechanism:
+  //   R1 (33K) connects Q9's collector to a bias node.
+  //   D2 (1S2473) at the bias node acts as a voltage-controlled
+  //   resistor: rd ≈ 26mV / I_bias.
+  //   U3 (M5218L inverting amp, gain=-68K/27K=-2.52) converts
+  //   the 8-bit DAC voltage (0-5V) to a control current through
+  //   D2, varying its dynamic resistance.
+  //
+  //   Slider at 0:  DAC=0V -> U3 out≈0V -> D2 off -> rd high
+  //                 -> signal passes through D3 -> sub audible
+  //   Slider at 10: DAC=5V -> U3 out=-12.6V -> D2 conducts hard
+  //                 -> rd≈0 -> signal bleeds through R1 -> sub silent
+  //   (Note: slider polarity and exact attenuation direction need
+  //    verification — the inverting amp may flip the sense.)
+  //
+  // WHY WE CAN'T FULLY SIMULATE THIS:
+  //   The attenuation depends on D2's AC dynamic resistance
+  //   interacting with the signal amplitude at Q9's collector.
+  //   A proper simulation requires transient analysis with
+  //   simultaneous AC signal and DC bias — ngspice can do this
+  //   but the ideal op amp models don't interact correctly with
+  //   the D2 clamping circuit. The real M5218L has finite output
+  //   current that creates a proper equilibrium with D2; the
+  //   ideal op amp overwhelms D2.
+  //
+  // SONIC CHARACTER:
+  //   Because diodes are nonlinear, this circuit introduces
+  //   subtle harmonic distortion that varies with attenuation
+  //   level — part of the Juno's character. The passive shunt
+  //   also cannot achieve perfect silence; a faint "ghostly
+  //   bleed" of the oscillators is audible at zero slider,
+  //   which is a known Juno-60 trait.
+  //
+  // CURRENT MODEL:
+  //   Using measured audio taper approximation as placeholder.
+  //   The real circuit's transfer function is determined by the
+  //   diode's rd vs bias current curve, which produces a
+  //   nonlinear but roughly logarithmic attenuation. An audio
+  //   taper (exp) is in the right ballpark.
+  //
+  // TODO: Derive proper transfer function from hardware
+  //   measurements or improved SPICE simulation with realistic
+  //   op amp model. Also model the signal-dependent THD that
+  //   the diode shunt introduces at intermediate levels.
   static float dcoSubLevel_j60(float t)
   {
-    return t; // linear, normalized to 1.0; kSubAmp handles level
+    return dcoSubLevel_j6(t);
   }
 
   // dcoSubLevel_j106() - J106 sub level: no ROM table, straight DAC output.
-  // Same transistor shunt circuit as J60. Linear.
+  // Same transistor shunt circuit as J60.
   static float dcoSubLevel_j106(float t)
   {
-    return t; // linear, normalized to 1.0; kSubAmp handles level
+    return dcoSubLevel_j6(t);
   }
 
   // dcoNoiseLevel_j6() - Maps Juno-6 DCO Noise slider (0..1) to linear gain.
