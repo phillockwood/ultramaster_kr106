@@ -75,7 +75,6 @@
 
   .screenshot {
     width: 100%;
-    border-radius: 8px;
     border: 1px solid #333;
     margin-bottom: 2rem;
     display: block;
@@ -369,7 +368,7 @@
     <img src="presets.png" alt="Patch Bank" class="screenshot" style="margin-top: 0.8rem; pointer-events: none; flex-basis: 100%;">
   </summary>
 
-  <p>The KR-106 includes 128 factory presets derived from original Juno-106 patch data. The current preset name is shown below the scope.</p>
+  <p>The KR-106 includes 256 factory presets across two banks. In 106 mode, 128 presets decoded from original Juno-106 factory SysEx data. In 60 mode, 128 presets from the original Juno-60 factory tape backups. Switching modes changes the visible preset bank and sets the display to Manual and remaps sliders so VCF FRQ stays at the same Hz. The current preset name is shown below the scope.</p>
 
   <h3>Browsing</h3>
   <p><strong>Left-click</strong> the preset display to open the patch selector, a full grid showing all 128 presets. Click any patch to load it. You can also use the arrow keys or mouse wheel to step through presets.</p>
@@ -403,9 +402,10 @@
     <li><strong>6 / 8 / 10 Voices</strong> Maximum polyphony. More voices use more CPU.</li>
     <li><strong>Ignore MIDI Velocity</strong> All notes play at full velocity, like the original hardware.</li>
     <li><strong>Limit Arp to Keyboard Range</strong> Arpeggio wraps notes back into the 61-key range instead of extending beyond it.</li>
-    <li><strong>Sync Arp to Host</strong> When on, the arpeggiator locks to the DAW's tempo. The Arp Rate slider snaps to note divisions (4 Beats, 2 Beats, Quarter, Quarter Triplet, Eighth, Eighth Triplet, 16th, 16th Triplet, 32nd). Steps align to the beat grid when the transport is playing. When the transport is stopped, the arp free-runs at the tempo-matched rate. In standalone mode, syncs to 120 BPM.</li>
+    <li><strong>Sync Arp to Host</strong> When on, the arpeggiator locks to the DAW's tempo. The Arp Rate slider snaps to note divisions (4 Beats, 2 Beats, Quarter, Quarter Triplet, Eighth, Eighth Triplet, 16th, 16th Triplet, 32nd). Steps align to the beat grid when the transport is playing. When the transport is stopped, the arp free-runs at the tempo-matched rate. If the host does not provide tempo information, sync is silently disabled and the arp falls back to the rate slider. Compatible with LV2 hosts (Jalv/Zynthian) that send transport updates only on state changes.</li>
     <li><strong>Sync LFO to Host</strong> When on, the LFO rate locks to the DAW's tempo. The LFO Rate slider snaps to note divisions (24 Beats down to 64th Note). The LFO phase resets when the transport starts. When both Arp and LFO are synced, their rates lock to exact multiples of each other.</li>
     <li><strong>Mono Retrigger</strong> When on (default), every new note in mono mode retriggers the envelope. When off, legato notes glide without retriggering.</li>
+    <li><strong>MIDI Out: SysEx</strong> Selects the MIDI output format. When off (default), the plugin sends standard MIDI CC for parameter changes and Program Change for preset selection. When on, it sends Roland Juno-106 SysEx (IPR for individual parameters, APR for preset dumps). The plugin always <em>receives</em> CC, SysEx, and Program Change regardless of this setting.</li>
 
     <li><strong>VCF Oversample 2x / 4x</strong> Filter oversampling factor. 4x (default) gives clean self-oscillation tracking up to 20 kHz. 2x uses less CPU but may alias at high cutoff + high resonance.</li>
     <li><strong>Component Variance</strong> Opens the per-voice variance editor. See below.</li>
@@ -505,10 +505,10 @@
   </table>
 
   <h3>SysEx</h3>
-  <p>The KR-106 sends and receives Roland Juno-106 SysEx messages. Individual parameter changes are sent as IPR (Individual Parameter) messages: <code>F0 41 32 0n cc vv F7</code> where <code>n</code> is MIDI channel, <code>cc</code> is the control number from the table above, and <code>vv</code> is the value (0-127).</p>
+  <p>The KR-106 sends and receives Roland Juno-106 SysEx messages. Enable <strong>MIDI Out: SysEx</strong> in the settings menu to send SysEx output (off by default). When enabled, individual parameter changes are sent as IPR (Individual Parameter) messages: <code>F0 41 32 0n cc vv F7</code> where <code>n</code> is MIDI channel, <code>cc</code> is the control number from the table above, and <code>vv</code> is the value (0-127). When disabled, standard MIDI CC is sent instead. The plugin always receives both CC and SysEx regardless of this setting.</p>
 
   <h3>APR (All Parameter Report)</h3>
-  <p>A full patch dump is emitted on every preset change, and can also be received to load a complete patch. The format is 24 bytes:</p>
+  <p>In SysEx mode, a full patch dump is emitted on every preset change. In CC mode, a Program Change is sent instead. APR messages can always be received to load a complete patch. The format is 24 bytes:</p>
   <p><code>F0 41 30 0n pp [16 sliders] [sw1] [sw2] F7</code></p>
   <ul>
     <li><code>0n</code> MIDI channel (0-F)</li>
@@ -583,9 +583,11 @@
 
   <h3>Preset Banks</h3>
   <p>Each mode has its own bank of 128 factory presets. 60 mode includes patches from
-     the original Juno-60 factory patch data. 106 mode includes all original Juno-106
-     patches decoded from factory SysEx data. Switching modes changes the visible preset
-     bank and sets the display to Manual.</p>
+     the original Juno-60 factory tape backups (Bank A: 56 named patches covering
+     strings, brass, keyboards, organs, synth leads, and effects; Bank B: factory tape
+     preset names). 106 mode includes all original Juno-106 patches decoded from factory
+     SysEx data. Switching modes changes the visible preset bank and sets the display
+     to Manual.</p>
 
   </details>
 </main>
