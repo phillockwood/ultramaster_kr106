@@ -71,7 +71,7 @@ INIT_SW2 = 0x19
 
 def make_apr(patch_num=0):
     """Build a 24-byte APR SysEx message."""
-    data = [0xF0, 0x41, 0x30, CHANNEL, patch_num]
+    data = [0xF0, 0x41, 0x31, CHANNEL, patch_num]  # 0x31 = manual mode (no preset load)
     data.extend(INIT_SLIDERS)
     data.extend([INIT_SW1, INIT_SW2])
     data.append(0xF7)
