@@ -34,16 +34,12 @@
 //   BBD bandwidth: gentle rolloff (-3 dB at ~10 kHz)
 //
 // Anti-aliasing and reconstruction filters (Tr13/Tr14 and Tr15/Tr16):
-//   Two identical 2-transistor active filter stages, one before and one
-//   after each MN3009. Each stage has four RC poles:
-//     Pole 1: 10,620 Hz  (R89=22K, C31=680pF — input shunt)
-//     Pole 2:  8,830 Hz  (R88=22K, C33=820pF — first stage)
-//     Pole 3:  7,234 Hz  (R122=10K, C52=2.2nF — MN3009 pin RC)
-//     Pole 4:  4,020 Hz  (R92=22K, C34=1.8nF — interstage, dominant)
-//   Post-filter is a matched mirror: R97/R98, C37(820p), C35(680p),
-//   R95/R96, C38(1.8nF), C36(270p), R100(10K) — identical values.
-//   Combined with the BBD Nyquist-tracking pole (clock-dependent), the
-//   total rolloff is considerably steeper than -18 dB/oct.
+//   Two identical 2-transistor active filter stages (2SA1015 PNP emitter
+//   followers), one before and one after each MN3009. ngspice simulation
+//   shows the emitter followers' low output impedance (~43 ohms) makes the
+//   shunt caps transparent, producing a Butterworth-like response rather
+//   than a gradual 4-pole rolloff. See BBDFilter.h for details.
+//   -3 dB at 9,661 Hz, flat through 5 kHz, -22 dB/oct stopband.
 //
 // Clock depth derived from measured delay maximum (~6.2ms for modes I/II).
 // Center clock ≈ 42,667 Hz (from 3.0ms center delay).
@@ -84,86 +80,8 @@ struct ChorusLFO
   }
 };
 
-// ============================================================
-// 1-pole TPT lowpass
-// ============================================================
-struct TPT1
-{
-  float mS = 0.f;
-
-  void Reset() { mS = 0.f; }
-
-  float Process(float input, float g)
-  {
-    float v = (input - mS) * g / (1.f + g);
-    float lp = mS + v;
-    mS = lp + v;
-    return lp;
-  }
-};
-
-// ============================================================
-// 4-pole cascaded TPT lowpass — models Tr13/Tr14 (pre) and
-// Tr15/Tr16 (post) active filter stages plus the MN3009
-// input/output RC from the Juno-6 chorus board.
-// Identical topology and values on both sides.
-//
-// Pole frequencies from schematic RC pairs:
-//   Pole 1: R89(22K) + C31(680pF) → 10,620 Hz  (input shunt)
-//   Pole 2: R88(22K) + C33(820pF) →  8,830 Hz  (first stage)
-//   Pole 3: R122(10K) + C52(2.2nF) → 7,234 Hz  (MN3009 pin RC)
-//   Pole 4: R92(22K) + C34(1.8nF) →  4,020 Hz  (interstage, dominant)
-// ============================================================
-struct BBDFilter
-{
-  TPT1 mPole1, mPole2, mPole3, mPole4;
-  float mG1 = 0.f, mG2 = 0.f, mG3 = 0.f, mG4 = 0.f;
-
-  // 1 / (2 * pi * R * C)
-  static constexpr float kPole1Hz = 10620.f; // R89/C31
-  static constexpr float kPole2Hz =  8830.f; // R88/C33
-  static constexpr float kPole3Hz =  7234.f; // R122/C52 (MN3009 pin)
-  static constexpr float kPole4Hz =  4020.f; // R92/C34 (dominant)
-
-  void Init(float sampleRate)
-  {
-    auto safeG = [&](float hz) {
-      float fc = std::min(hz, sampleRate * 0.45f);
-      return tanf(static_cast<float>(M_PI) * fc / sampleRate);
-    };
-    mG1 = safeG(kPole1Hz);
-    mG2 = safeG(kPole2Hz);
-    mG3 = safeG(kPole3Hz);
-    mG4 = safeG(kPole4Hz);
-    Reset();
-  }
-
-  void Reset()
-  {
-    mPole1.Reset();
-    mPole2.Reset();
-    mPole3.Reset();
-    mPole4.Reset();
-  }
-
-  // Set all integrator states (for click-free bypass warmth)
-  void SetState(float value)
-  {
-    mPole1.mS = value;
-    mPole2.mS = value;
-    mPole3.mS = value;
-    mPole4.mS = value;
-  }
-
-  float Process(float input)
-  {
-    float x = mPole1.Process(input, mG1);
-    x = mPole2.Process(x, mG2);
-    x = mPole3.Process(x, mG3);
-    x = mPole4.Process(x, mG4);
-    return x;
-  }
-};
+// BBD pre/post filter — see BBDFilter.h for implementation details.
+#include "BBDFilter.h"
 
 // ============================================================
 // BBD delay line — one MN3009 signal path
