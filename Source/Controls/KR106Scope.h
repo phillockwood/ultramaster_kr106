@@ -529,7 +529,7 @@ private:
         if (!mProcessor) return;
 
         auto& dsp = mProcessor->mDSP;
-        bool j6 = (dsp.mSynthModel == 0);
+        bool j6 = (dsp.mSynthModel != kr106::kJ106);
         float sustain = std::max(mProcessor->getParam(kEnvS)->getValue(), 0.001f);
 
         static constexpr float kAttackTarget  = 1.2f;
@@ -737,7 +737,7 @@ private:
         if (!mProcessor) return;
 
         auto& dsp = mProcessor->mDSP;
-        bool j106 = (dsp.mSynthModel != 0);
+        bool j106 = (dsp.mSynthModel == kr106::kJ106);
 
         float slider = dsp.mSliderVcfFreq;
         float fc;

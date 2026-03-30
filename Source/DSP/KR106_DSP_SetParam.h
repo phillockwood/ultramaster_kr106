@@ -26,9 +26,9 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
   {
     case kDcoLfo: {
       mSliderDcoLfo = static_cast<float>(value);
-      float depth = (mSynthModel == 0)
-        ? kr106::Voice<T>::dcoLfoDepth6(mSliderDcoLfo)
-        : kr106::Voice<T>::dcoLfoDepth106(mSliderDcoLfo);
+      float depth = (mSynthModel == kr106::kJ106) ? kr106::Voice<T>::dcoLfoDepth_j106(mSliderDcoLfo)
+                  : (mSynthModel == kr106::kJ60)  ? kr106::Voice<T>::dcoLfoDepth_j60(mSliderDcoLfo)
+                  : kr106::Voice<T>::dcoLfoDepth6(mSliderDcoLfo);
       ForEachVoice([depth](kr106::Voice<T>& v) { v.mDcoLfo = depth; });
       break;
     }
@@ -37,17 +37,17 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
       break;
     case kDcoSub: {
       mSliderDcoSub = static_cast<float>(value);
-      float level = (mSynthModel == 0)
-        ? kr106::Voice<T>::dcoSubLevel_j6(mSliderDcoSub)
-        : kr106::Voice<T>::dcoSubLevel_j106(mSliderDcoSub);
+      float level = (mSynthModel == kr106::kJ106) ? kr106::Voice<T>::dcoSubLevel_j106(mSliderDcoSub)
+                  : (mSynthModel == kr106::kJ60)  ? kr106::Voice<T>::dcoSubLevel_j60(mSliderDcoSub)
+                  : kr106::Voice<T>::dcoSubLevel_j6(mSliderDcoSub);
       ForEachVoice([level](kr106::Voice<T>& v) { v.mDcoSub = level; });
       break;
     }
     case kDcoNoise: {
       mSliderDcoNoise = static_cast<float>(value);
-      float level = (mSynthModel == 0)
-        ? kr106::Voice<T>::dcoNoiseLevel_j6(mSliderDcoNoise)
-        : kr106::Voice<T>::dcoNoiseLevel_j106(mSliderDcoNoise);
+      float level = (mSynthModel == kr106::kJ106) ? kr106::Voice<T>::dcoNoiseLevel_j106(mSliderDcoNoise)
+                  : (mSynthModel == kr106::kJ60)  ? kr106::Voice<T>::dcoNoiseLevel_j60(mSliderDcoNoise)
+                  : kr106::Voice<T>::dcoNoiseLevel_j6(mSliderDcoNoise);
       ForEachVoice([level](kr106::Voice<T>& v) { v.mDcoNoise = level; });
       break;
     }
@@ -81,9 +81,9 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
     }
     case kVcfLfo: {
       mSliderVcfLfo = static_cast<float>(value);
-      float depth = (mSynthModel == 0)
-        ? kr106::Voice<T>::vcfLfoDepth6(mSliderVcfLfo)
-        : kr106::Voice<T>::vcfLfoDepth106(mSliderVcfLfo);
+      float depth = (mSynthModel == kr106::kJ106) ? kr106::Voice<T>::vcfLfoDepth_j106(mSliderVcfLfo)
+                  : (mSynthModel == kr106::kJ60)  ? kr106::Voice<T>::vcfLfoDepth_j60(mSliderVcfLfo)
+                  : kr106::Voice<T>::vcfLfoDepth6(mSliderVcfLfo);
       uint8_t lfoDepthInt = static_cast<uint8_t>(mSliderVcfLfo * 254.f);
       ForEachVoice([depth, lfoDepthInt](kr106::Voice<T>& v) {
         v.mVcfLfo = depth;
@@ -118,38 +118,29 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
 
     case kEnvA: {
       mSliderA = static_cast<float>(value);
-      if (mSynthModel == 0) {
-        // Measured from 1982 Juno-6: 6 voices at slider positions 1–9,
-        // averaged completion times (seconds):
-        //   A=1: .003  A=2: .016  A=3: .053  A=4: .115  A=5: .217
-        //   A=6: .427  A=7: .889  A=8: 1.089 A=9: 2.495
-        // Endpoints from spec: A=0: 1ms, A=10: 3s.
-        // Note: A/D/R pots are reverse-log (C-taper), so slider position maps
-        // nonlinearly to resistance — the dead spot at A=7-8 is a pot characteristic.
-        // Log-linear interpolation between tau values (tau = completion / ln(6),
-        // since kAttackTarget=1.2 and the RC reaches 1.0 at ln(6) time constants).
-        float tau = kr106::ADSR::AttackTauJ6(mSliderA);
-        ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetAttackTau(tau); });
-      } else {
+      if (mSynthModel == kr106::kJ106) {
         float s = mSliderA;
         ForEachVoice([s](kr106::Voice<T>& v) { v.mADSR.Set106Attack(s); });
+      } else {
+        // J6/J60: analog RC circuit on IR3R01
+        float tau = (mSynthModel == kr106::kJ60)
+          ? kr106::ADSR::AttackTauJ60(mSliderA)
+          : kr106::ADSR::AttackTauJ6(mSliderA);
+        ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetAttackTau(tau); });
       }
       break;
     }
     case kEnvD: {
       mSliderD = static_cast<float>(value);
-      if (mSynthModel == 0) {
-        // Measured from 1982 Juno-6, VCF sweep durations (seconds):
-        //   D=2: .086  D=3: .262  D=4: .821  D=5: 2.610  D=6: 2.325
-        //   D=7: 5.609  D=8: 8.774  D=9: 20.051  D=10: 22.093
-        // Re-measured D=4b: .876  D=5b: 1.587  D=6b: 2.564
-        // Quadratic-exponential fit excluding dead spots at D=4, D=8.
-        // FIXME(kr106): re-measure with pot voltage readings for better accuracy.
-        float tau = kr106::ADSR::DecRelTauJ6(mSliderD);
-        ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetDecayTau(tau); });
-      } else {
+      if (mSynthModel == kr106::kJ106) {
         int idx = static_cast<int>(mSliderD * 127.f + 0.5f);
         ForEachVoice([idx](kr106::Voice<T>& v) { v.mADSR.Set106Decay(idx); });
+      } else {
+        // J6/J60: analog RC circuit on IR3R01
+        float tau = (mSynthModel == kr106::kJ60)
+          ? kr106::ADSR::DecRelTauJ60(mSliderD)
+          : kr106::ADSR::DecRelTauJ6(mSliderD);
+        ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetDecayTau(tau); });
       }
       break;
     }
@@ -160,14 +151,15 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
     }
     case kEnvR: {
       mSliderR = static_cast<float>(value);
-      if (mSynthModel == 0) {
-        // Same circuit as decay (shared R/C network on IR3R01).
-        // FIXME(kr106): re-measure with pot voltage readings for better accuracy.
-        float tau = kr106::ADSR::DecRelTauJ6(mSliderR);
-        ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetReleaseTau(tau); });
-      } else {
+      if (mSynthModel == kr106::kJ106) {
         int idx = static_cast<int>(mSliderR * 127.f + 0.5f);
         ForEachVoice([idx](kr106::Voice<T>& v) { v.mADSR.Set106Release(idx); });
+      } else {
+        // J6/J60: same circuit as decay (shared R/C network on IR3R01)
+        float tau = (mSynthModel == kr106::kJ60)
+          ? kr106::ADSR::DecRelTauJ60(mSliderR)
+          : kr106::ADSR::DecRelTauJ6(mSliderR);
+        ForEachVoice([tau](kr106::Voice<T>& v) { v.mADSR.SetReleaseTau(tau); });
       }
       break;
     }
@@ -208,16 +200,15 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
       });
       break;
     case kAdsrMode: {
-      mSynthModel = static_cast<int>(value);
       // UI: 0 = J60 (60 mode), 1 = J106 (106 mode)
-      kr106::Model model = (mSynthModel == 0) ? kr106::kJ60 : kr106::kJ106;
-      ForEachVoice([model](kr106::Voice<T>& v) {
-        v.mModel = model;
-        v.mADSR.mModel = model;
-        v.mVCF.mJ106Res = (model == kr106::kJ106);
-        v.mOsc.mPulseInvert = (model == kr106::kJ106);
+      mSynthModel = (static_cast<int>(value) == 0) ? kr106::kJ60 : kr106::kJ106;
+      ForEachVoice([this](kr106::Voice<T>& v) {
+        v.mModel = mSynthModel;
+        v.mADSR.mModel = mSynthModel;
+        v.mVCF.mJ106Res = (mSynthModel == kr106::kJ106);
+        v.mOsc.mPulseInvert = (mSynthModel == kr106::kJ106);
       });
-      mLFO.mModel = model;
+      mLFO.mModel = mSynthModel;
       SetParam(kEnvA, mSliderA);
       SetParam(kEnvD, mSliderD);
       SetParam(kEnvR, mSliderR);
@@ -273,7 +264,7 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
       // is -5.9 mV/dB, yielding approximately +/-10 dB of gain range.
       // Confirmed by hardware recording (Lewis Francis): -9.8 dB / +9.9 dB.
       // dB-linear law: slider 0 = -10 dB, slider 0.5 = unity, slider 1 = +10 dB
-      if (mSynthModel == 0) {
+      if (mSynthModel == kr106::kJ6) {
         mVcaLevel = 1.f; // J6: no patch-level VCA
       } else {
         static constexpr float kMinDB = -10.f;

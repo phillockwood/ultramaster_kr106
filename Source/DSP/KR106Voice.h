@@ -37,7 +37,7 @@ public:
   // Voice parameters (set by KR106DSP::SetParam via ForEachVoice)
   float mDcoLfo       = 0.f;
   float mDcoPwm       = 0.f;
-  float mDcoSub       = 0.95080f; // pre-computed from dcoSubLevel_j6(1.0)
+  float mDcoSub       = 1.f; // pre-computed from dcoSubLevel (normalized to 1.0)
   float mDcoNoise     = 0.f;     // pre-computed from dcoNoiseLevel_j6()
   float mVcfFreq      = 700.f; // Hz (J6 mode)
   float mVcfFreqJ60   = 700.f; // Hz (J60 mode)
@@ -216,6 +216,13 @@ public:
     return kTable[i0] + frac * (kTable[i0 + 1] - kTable[i0]);
   }
 
+  // dcoLfoDepth_j60() - J60: same IR3109 circuit, linear pot.
+  // TODO: model 50KB linear pot + 10K trim + PNP transistor CV path.
+  static float dcoLfoDepth_j60(float t) { return dcoLfoDepth6(t); }
+
+  // dcoLfoDepth_j106() - wrapper for consistent naming.
+  static float dcoLfoDepth_j106(float t) { return dcoLfoDepth106(t); }
+
   // Maps the Juno-6 VCF LFO depth slider (0..1) to a peak pitch deviation
   // in semitones (per direction).
   //
@@ -261,6 +268,12 @@ public:
     return t * kMaxSemitones;
   }
 
+  // vcfLfoDepth_j60() - J60: same IR3109 circuit as J6.
+  static float vcfLfoDepth_j60(float t) { return vcfLfoDepth6(t); }
+
+  // vcfLfoDepth_j106() - wrapper for consistent naming.
+  static float vcfLfoDepth_j106(float t) { return vcfLfoDepth106(t); }
+
   // vcfEnvDepth6() - Maps normalized VCF ENV MOD slider (0..1) to
   // modulation depth in log-frequency space (natural log units).
   //
@@ -302,6 +315,15 @@ public:
     float frac = idx - i0;
     return kTable[i0] + frac * (kTable[i0 + 1] - kTable[i0]);
   }
+
+  // vcfEnvDepth_j60() - J60: same IR3109 + pot circuit as J6.
+  // TODO: J60 uses 50KB linear pot (vs J6 A10K). Downstream circuit may differ.
+  static float vcfEnvDepth_j60(float t) { return vcfEnvDepth6(t); }
+
+  // vcfEnvDepth_j106() - J106: linear envelope modulation.
+  // Firmware multiplies env (0-255) by slider (0-254) via mul8x16.
+  // TODO: derive from ROM analysis if different from J6 curve.
+  static float vcfEnvDepth_j106(float t) { return vcfEnvDepth_j60(t); }
 
   // dcoLfoDepth106() - Maps normalized DCO LFO depth slider (0..1) to
   // peak pitch deviation in semitones (±4 st = ±400 cents at max).
@@ -432,27 +454,34 @@ public:
     return coeff * 238.1f / 256.f;
   }
 
+  // portaRate_j6() - wrapper for consistent naming.
+  static float portaRate_j6(float t) { return portaRate(t); }
+
+  // portaRate_j60() - J60: same firmware portamento table.
+  static float portaRate_j60(float t) { return portaRate_j6(t); }
+
+  // portaRate_j106() - J106: same firmware portamento table.
+  static float portaRate_j106(float t) { return portaRate_j6(t); }
+
   // dcoSubLevel_j6() - Maps Juno-6 DCO Sub slider (0..1) to linear gain.
   // From hardware measurements (docs/J6_MEASUREMENTS/SUB_OSC.csv):
   //   dB relative to saw/pulse at each slider position (0-10).
-  // Table stores linear gain values (10^(dB/20)), normalized so that
-  // slider=10 produces the measured +1.5 dB relative to saw when combined
-  // with kSubAmp/kSawAmp (0.625/0.5 = +1.94 dB). Net effect at max:
-  // subLevel * kSubAmp/kSawAmp = +1.5 dB, so subLevel(10) = 10^(-0.44/20).
+  // Normalized to 1.0 at max. kSubAmp at the mix point sets the +1.5 dB
+  // level over saw measured on hardware.
   static float dcoSubLevel_j6(float t)
   {
     static constexpr float kTable[11] = {
-      0.00271f,   // 0: -49.4 dB (effectively silent)
-      0.00271f,   // 1: -49.4 dB
-      0.02388f,   // 2: -30.5 dB
-      0.05534f,   // 3: -23.2 dB
-      0.09186f,   // 4: -18.8 dB
-      0.14394f,   // 5: -14.9 dB
-      0.19638f,   // 6: -12.2 dB
-      0.41985f,   // 7: -5.6 dB
-      0.63546f,   // 8: -2.0 dB
-      0.83771f,   // 9:  +0.4 dB
-      0.95080f    // 10: +1.5 dB (net +1.5 dB with kSubAmp/kSawAmp)
+      0.00285f,   // 0: -49.4 dB (effectively silent)
+      0.00285f,   // 1: -49.4 dB
+      0.02512f,   // 2: -30.5 dB
+      0.05820f,   // 3: -23.2 dB
+      0.09661f,   // 4: -18.8 dB
+      0.15139f,   // 5: -14.9 dB
+      0.20654f,   // 6: -12.2 dB
+      0.44158f,   // 7: -5.6 dB
+      0.66834f,   // 8: -2.0 dB
+      0.88106f,   // 9:  +0.4 dB
+      1.00000f    // 10: 0 dB (normalized; kSubAmp scales to +1.5 dB over saw)
     };
     float idx = t * 10.f;
     int i0 = std::min(static_cast<int>(idx), 9);
@@ -467,14 +496,14 @@ public:
   // TODO: verify with J60 hardware measurements.
   static float dcoSubLevel_j60(float t)
   {
-    return t * 0.95080f; // linear, scaled to match J6 max (+1.5 dB net)
+    return t; // linear, normalized to 1.0; kSubAmp handles level
   }
 
   // dcoSubLevel_j106() - J106 sub level: no ROM table, straight DAC output.
   // Same transistor shunt circuit as J60. Linear.
   static float dcoSubLevel_j106(float t)
   {
-    return t * 0.95080f; // linear, scaled to match J6 max (+1.5 dB net)
+    return t; // linear, normalized to 1.0; kSubAmp handles level
   }
 
   // dcoNoiseLevel_j6() - Maps Juno-6 DCO Noise slider (0..1) to linear gain.
@@ -483,22 +512,22 @@ public:
   // no pulldown to -15V. The A-taper pot provides most of the curve;
   // downstream circuit is similar to J60 but lower collector R.
   // Different curve than sub -- more gradual taper, no dead zone at slider 1.
-  // Noise is mixed directly (no kNoiseAmp constant), so the table values are
-  // absolute linear gains relative to saw * kSawAmp.
+  // Normalized to 1.0 at max (0 dB relative to saw). kNoiseAmp at the mix
+  // point scales to match saw * kSawAmp.
   static float dcoNoiseLevel_j6(float t)
   {
     static constexpr float kTable[11] = {
       0.0f,       // 0: -inf
-      0.00748f,   // 1: -36.5 dB
-      0.02286f,   // 2: -26.8 dB
-      0.03083f,   // 3: -24.2 dB
-      0.04159f,   // 4: -21.6 dB
-      0.05058f,   // 5: -19.9 dB
-      0.05546f,   // 6: -19.1 dB
-      0.10327f,   // 7: -13.7 dB
-      0.15100f,   // 8: -10.4 dB
-      0.25643f,   // 9: -5.8 dB
-      0.50000f    // 10: 0 dB (= kSawAmp, unity relative to saw)
+      0.01496f,   // 1: -36.5 dB
+      0.04571f,   // 2: -26.8 dB
+      0.06166f,   // 3: -24.2 dB
+      0.08318f,   // 4: -21.6 dB
+      0.10116f,   // 5: -19.9 dB
+      0.11092f,   // 6: -19.1 dB
+      0.20654f,   // 7: -13.7 dB
+      0.30200f,   // 8: -10.4 dB
+      0.51286f,   // 9: -5.8 dB
+      1.00000f    // 10: 0 dB (normalized to 1.0; kNoiseAmp scales to saw level)
     };
     float idx = t * 10.f;
     int i0 = std::min(static_cast<int>(idx), 9);
@@ -506,27 +535,48 @@ public:
     return kTable[i0] + frac * (kTable[i0 + 1] - kTable[i0]);
   }
 
-  // dcoNoiseLevel_j60() - J60 noise level: linear pot + PNP transistor circuit.
-  // 50KB linear pot -> DAC 0-6V -> 50K trim + 6.8K -> PNP 2SA1015 (base GND) -> BA662.
-  // Collector: 50K trim + 6.8K (~7K-57K), no pulldown. CV range 0-6V.
-  // The BA662 is linear; the PNP transistor gives the curve.
-  // FIXME: model PNP 2SA1015 transistor curve (Vbe threshold + emitter
-  // degeneration from trim pot). Using AudioTaper as placeholder -- it's an
-  // exponential in the right ballpark, but not derived from the actual circuit.
+  // dcoNoiseLevel_j60() — Juno-60 noise level scaling.
+  //
+  // Circuit: 8-bit R2R DAC (0-5V via CD4050B buffers) ->
+  //   R36 (1.5k) -> VR14 (50k trim) -> R14 (6.8k) ->
+  //   Q8 (2SA1015 PNP, base=GND) -> BA662 Iabc pin.
+  //
+  // BA662 Iabc is a Wilson current mirror input. Q8's exponential
+  // Ic(Vbe) driving into the mirror's log V-I characteristic
+  // produces a nearly linear transfer with a soft turn-on knee
+  // at ~11% of slider travel (Q8 Vbe threshold).
+  //
+  // Derived from ngspice DC sweep: 2SA1015 model, 1N4148 diode
+  // as BA662 Iabc stand-in. RMS error < 0.002. Normalized to
+  // 0 dB (1.0) at full slider.
   static float dcoNoiseLevel_j60(float t)
   {
-    static const float kScale = 1.f / (std::exp(3.f) - 1.f);
-    return (std::exp(3.f * t) - 1.f) * kScale * 0.50000f;
+    constexpr float kA = 1.1260f;  // output scale (1.0 at t=1)
+    constexpr float kB = 0.0227f;  // knee softness
+    constexpr float kC = 0.1120f;  // turn-on threshold
+    float d = t - kC;
+    return kA * (sqrtf(d * d + kB * kB) + d) * 0.5f;
   }
 
-  // dcoNoiseLevel_j106() - J106 noise level: same PNP + BA662 circuit as J60.
-  // Collector: 2.26M +/- 50K (trim) to signal, 2.2M to -15V. CV range 0-10V.
-  // Much higher collector R and wider CV range than J60 -- expect steeper curve.
-  // FIXME: model actual transistor curve; using AudioTaper placeholder.
+  // dcoNoiseLevel_j106() — Juno-106 noise level scaling.
+  //
+  // Circuit: 12-bit DAC (0-5V, scaled to 0-10V by op amp x2) ->
+  //   VR (100k trim) -> R (10k) -> Q (2SA1015 PNP, base=GND) ->
+  //   BA662 Iabc. 2.2M bleeder to -15V.
+  //
+  // Same topology as J60, wider DAC range, higher impedances.
+  // Shorter dead zone (~6%) due to 10V range reaching Vbe
+  // threshold sooner in normalized slider travel.
+  //
+  // Derived from ngspice DC sweep. RMS error < 0.002.
+  // Normalized to 0 dB (1.0) at full slider.
   static float dcoNoiseLevel_j106(float t)
   {
-    static const float kScale = 1.f / (std::exp(3.f) - 1.f);
-    return (std::exp(3.f * t) - 1.f) * kScale * 0.50000f;
+    constexpr float kA = 1.0632f;  // output scale (1.0 at t=1)
+    constexpr float kB = 0.0146f;  // knee softness
+    constexpr float kC = 0.0594f;  // turn-on threshold
+    float d = t - kC;
+    return kA * (sqrtf(d * d + kB * kB) + d) * 0.5f;
   }
 
   void UpdatePortaCoeff()
@@ -767,9 +817,8 @@ public:
         static constexpr float kSemiToLogFreq = 0.05776f;
 
         float envScale = (mVcfEnvInvert > 0) ? kEnvScale : kEnvInvScale;
-        float vcfBaseHz = (mModel == kJ106) ? mVcfFreqJ106
-                        : (mModel == kJ60) ? mVcfFreqJ60
-                        : mVcfFreq; // J6
+        float vcfBaseHz = (mModel == kJ60) ? mVcfFreqJ60
+                        : mVcfFreq; // J6 (J106 takes the other branch)
         // J6: KBD tracks from C1 (32.7 Hz). J60 and J106: from C4 (261.6 Hz).
         float kbdRef    = (mModel == kJ6) ? 32.703f : 261.626f;
         float vcfFrq = logf(vcfBaseHz) + mVcfFreqOffset;
@@ -801,7 +850,7 @@ public:
 
       // Noise mixed from shared source (single generator, matches hardware)
       if (noiseAT > 0.f)
-        oscOut += static_cast<float>(noiseBuffer[i]) * noiseAT;
+        oscOut += static_cast<float>(noiseBuffer[i]) * kNoiseAmp * noiseAT;
       float signal = mVCF.Process(oscOut, vcfCPS, mVcfRes);
 
       // --- VCA (BA662 + TR17 exponential converter) ---

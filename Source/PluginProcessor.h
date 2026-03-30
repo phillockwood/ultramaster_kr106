@@ -160,7 +160,7 @@ private:
   std::atomic<int> mUIMidiTail{0};
 
   int mCurrentPreset = 0;  // 0-127 within current bank
-  int presetBankOffset() const { return (mDSP.mSynthModel == 0) ? 0 : 128; }
+  int presetBankOffset() const { return (mDSP.mSynthModel == kr106::kJ106) ? 128 : 0; }
   int absPresetIndex() const { return mCurrentPreset + presetBankOffset(); }
 
   // Flag: emit SysEx dump for current preset values on next processBlock

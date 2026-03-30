@@ -19,7 +19,8 @@ namespace kr106 {
 
 static constexpr float kSawAmp = 0.5f; // SAW is 0v to 12v
 static constexpr float kPulseAmp = 0.5f; // PULSE is 0v to +12v TL074
-static constexpr float kSubAmp = 0.625f; // SUB is 0v to +15v CMOS
+static constexpr float kSubAmp = 0.5942f; // SUB at +1.5 dB over saw (J6 measurement)
+static constexpr float kNoiseAmp = 0.5f; // Noise at 0 dB = same level as saw
 static constexpr float kSwitchRamp = 1.f / 64.f; // ~1.5ms at 44.1k
 
 // 4th-order polyBLEP residual — smooths a discontinuity of height 2.

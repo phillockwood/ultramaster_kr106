@@ -98,6 +98,9 @@ static constexpr int kSw2Params[] = {
 
 KR106AudioProcessor::KR106AudioProcessor()
   : AudioProcessor(BusesProperties()
+#if KR106_AUMF_BUILD
+      .withInput("Input", juce::AudioChannelSet::stereo(), true)
+#endif
       .withOutput("Output", juce::AudioChannelSet::stereo(), true))
 {
   std::fill(std::begin(mParamCC), std::end(mParamCC), -1);
@@ -183,7 +186,7 @@ KR106AudioProcessor::KR106AudioProcessor()
 
   using PV = kr106::ParamValue;
 
-  auto isJ6 = [this]() { return mDSP.mSynthModel == 0; };
+  auto isJ6 = [this]() { return mDSP.mSynthModel != kr106::kJ106; };
 
   SFV fmtVcfHz = [this, isJ6](float v, int) {
     float hz = PV::vcfFreqHz(v, isJ6());
@@ -761,7 +764,12 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
           int ctrl = data[3];
           int val  = data[4];
           if (ctrl <= 0x0F)
+          {
             mParams[kSysExToParam[ctrl]]->setValueNotifyingHost(val / 127.f);
+            // J106 has no sub switch; infer from sub level
+            if (ctrl == 0x0F)
+              mParams[kDcoSubSw]->setValueNotifyingHost(val > 0 ? 1.f : 0.f);
+          }
           else if (ctrl == 0x10)
             decodeSwitches1(val);
           else if (ctrl == 0x11)
@@ -779,6 +787,8 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             mParams[kSysExToParam[cc]]->setValueNotifyingHost(p[cc] / 127.f);
           decodeSwitches1(p[16]);
           decodeSwitches2(p[17]);
+          // J106 has no sub switch; infer from sub level (cc 0x0F)
+          mParams[kDcoSubSw]->setValueNotifyingHost(p[0x0F] > 0 ? 1.f : 0.f);
 
           if (cmd == 0x30)
           {

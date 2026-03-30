@@ -243,6 +243,19 @@ struct ADSR
     return DecRelTauJ6(slider) * 2397.9f;
   }
 
+  // J60 ADSR stubs -- same IR3R01 chip and circuit as J6.
+  // TODO: J60 has different pot + shunt resistors (50KB + 22K/18K).
+  static float AttackTauJ60(float slider) { return AttackTauJ6(slider); }
+  static float DecRelTauJ60(float slider) { return DecRelTauJ6(slider); }
+  static float AttackMsJ60(float slider) { return AttackMsJ6(slider); }
+  static float DecRelMsJ60(float slider) { return DecRelMsJ6(slider); }
+
+  // J106 attack tau (for ParamValue display)
+  static float AttackTauJ106(float slider)
+  {
+    return AttackMs(slider) / 1791.8f; // approximate, from ms back to tau
+  }
+
   // J106 attack: 1ms RC settling + (ticks - 1) x tick period
   static float AttackMs(float slider)
   {

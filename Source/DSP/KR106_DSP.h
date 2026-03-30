@@ -501,7 +501,7 @@ public:
   int mRoundRobinNext = 0;
   bool mChorusI = false;
   bool mChorusII = false;
-  int mSynthModel = 0;
+  kr106::Model mSynthModel = kr106::kJ106;
   float mSliderA = 0.25f;
   float mSliderD = 0.25f;
   float mSliderR = 0.25f;

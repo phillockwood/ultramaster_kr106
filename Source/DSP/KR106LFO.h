@@ -98,7 +98,16 @@ struct LFO
   bool  mInHoldoff        = false;
   float mSlider           = 0.f; // stored slider value for reset
 
-  float lfoFreq(float t) { return (mModel != kJ106) ? lfoFreqJ6(t) : lfoFreqJ106(t); }
+  // J60 LFO rate: same circuit as J6 (A-taper pot differs but function is same).
+  // TODO: J60 uses 50KA pot (J6 uses A54), may need different alpha curve.
+  static float lfoFreqJ60(float slider) { return lfoFreqJ6(slider); }
+
+  float lfoFreq(float t)
+  {
+    if (mModel == kJ106) return lfoFreqJ106(t);
+    if (mModel == kJ60)  return lfoFreqJ60(t);
+    return lfoFreqJ6(t);
+  }
 
   // LFO rate comparison (Hz) at slider positions 0–10:
   //
@@ -189,6 +198,10 @@ struct LFO
   // FIXME(kr106) Measure LFO delay vs slider voltage on hardware Juno-6
   // Returns tau in seconds for RC exponential envelope.
   static float lfoDelayJ6(float t) { return t * 1.5f; }
+
+  // J60 LFO delay: same circuit as J6.
+  // TODO: J60 uses 50KB inverted pot + 22K shunt to GND.
+  static float lfoDelayJ60(float t) { return lfoDelayJ6(t); }
 
   // --- Juno-106 LFO delay: two-stage envelope from D7811G firmware ---
   //

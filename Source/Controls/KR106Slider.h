@@ -342,27 +342,27 @@ private:
   bool mRightDrag = false;
 };
 
-// HPF slider: draws tick marks, snaps to 4 positions in J106 mode.
-// In J6 mode (mSynthModel == 0), behaves as a continuous slider.
+// HPF slider: draws tick marks, snaps to 4 positions in J60/J106 mode.
+// In J6 mode (mSynthModel == kJ6), behaves as a continuous slider.
 class KR106HPFSlider : public KR106Slider
 {
 public:
   KR106HPFSlider(juce::RangedAudioParameter* param, KR106Tooltip* tip,
-                 const juce::Image& handleImg, int* synthModel)
+                 const juce::Image& handleImg, kr106::Model* synthModel)
     : KR106Slider(param, tip, handleImg), mSynthModel(synthModel) {}
 
   void paintTickMarks(juce::Graphics& g) override
   {
     auto bright = juce::Colour(219, 219, 219);
     auto dim    = juce::Colour(126, 126, 126);
-    if (mSynthModel && *mSynthModel == 0)
+    if (mSynthModel && *mSynthModel == kr106::kJ6)
     {
-      // J6: 11 tick marks (same as base class default)
+      // J6: 11 tick marks (continuous slider)
       KR106Slider::paintTickMarks(g);
     }
     else
     {
-      // J106: 4 tick marks at switch positions, bright
+      // J60/J106: 4 tick marks at switch positions, bright
       float tw = 17.f + static_cast<float>(mExtraRight);
       for (int i = 0; i < 4; i++)
       {
@@ -376,8 +376,8 @@ public:
   void mouseDrag(const juce::MouseEvent& e) override
   {
     KR106Slider::mouseDrag(e);
-    // In J106 mode, snap to 4 positions (0, 1/3, 2/3, 1)
-    if (mSynthModel && *mSynthModel != 0 && mParam)
+    // In J60/J106 mode, snap to 4 positions (0, 1/3, 2/3, 1)
+    if (mSynthModel && *mSynthModel != kr106::kJ6 && mParam)
     {
       float val = mParam->getValue();
       float snapped = std::round(val * 3.f) / 3.f;
@@ -392,7 +392,7 @@ public:
   void mouseUp(const juce::MouseEvent& e) override
   {
     // Snap on release too for clean final position
-    if (mSynthModel && *mSynthModel != 0 && mParam)
+    if (mSynthModel && *mSynthModel != kr106::kJ6 && mParam)
     {
       float val = mParam->getValue();
       float snapped = std::round(val * 3.f) / 3.f;
@@ -403,7 +403,7 @@ public:
   }
 
 private:
-  int* mSynthModel = nullptr;
+  kr106::Model* mSynthModel = nullptr;
 };
 
 // Arp Rate slider: when DAW sync is enabled, draws tick marks for note
