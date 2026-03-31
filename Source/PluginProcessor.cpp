@@ -324,9 +324,14 @@ KR106AudioProcessor::KR106AudioProcessor()
   addSlider(kDcoNoise,   "DCO Noise",   0.f, 0.f, 1.f, fmtPct, parsePct);
 
   // HPF (4-position switch)
-  SFV fmtHpf = [](float v, int) -> juce::String {
+  SFV fmtHpf = [this](float v, int) -> juce::String {
+    int pos = juce::jlimit(0, 3, juce::roundToInt(v));
+    if (mDSP.mSynthModel == kr106::kJ60) {
+      constexpr const char* labels[] = { "Flat", "122 Hz", "269 Hz", "571 Hz" };
+      return juce::String(labels[pos]);
+    }
     constexpr const char* labels[] = { "Bass Boost", "Flat", "236 Hz", "754 Hz" };
-    return juce::String(labels[juce::jlimit(0, 3, juce::roundToInt(v))]);
+    return juce::String(labels[pos]);
   };
   addSlider(kHpfFreq,    "HPF",         1.f, 0.f, 3.f, fmtHpf);
 

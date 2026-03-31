@@ -754,7 +754,9 @@ private:
         k = kr106::VCF::SoftClipK(k);
 
         float fcSlider = fc;
-        fc *= kr106::VCF::FreqCompensation(k);
+        float sr = static_cast<float>(mProcessor->getSampleRate());
+        float frqNorm = fc / std::max(sr, 1.f);
+        fc *= kr106::VCF::FreqCompensation(k, frqNorm);
         float comp = kr106::VCF::InputComp(k);
 
         // Display range

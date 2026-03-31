@@ -553,6 +553,21 @@
     <h2>Changelog</h2>
 
     <details open>
+      <summary><span class="ver">2.4.6.2</span> Per-model HPF, bass boost biquad, VCF frequency compensation, LFO delay fix</summary>
+      <ul>
+        <li>HPF: per-model frequencies from circuit analysis and ngspice simulation (J6/J60/J106)</li>
+        <li>J106 bass boost: low-shelf biquad modeled from M5218L two-stage op amp circuit (fc=103 Hz, +9.4 dB, Q=0.47)</li>
+        <li>J60 HPF: flat + 3 HPF positions (no bass boost), derived from CD4051 caps into 470K/38K/30K network</li>
+        <li>HPF mode remap on model switch (J106 boost/flat both map to J60 flat), click-free 64-sample crossfade</li>
+        <li>VCF frequency compensation: frequency-dependent power law (2.004 * frq^0.162) replaces flat 1.96x boost, fit to J106 hardware -3dB measurements</li>
+        <li>LFO delay: gate-based reset trigger matching D7811G firmware state machine (was using voice busy state, never re-triggered between notes)</li>
+        <li>DCO Sub: J60/J106 use J6 measured A-taper curve (diode shunt attenuator)</li>
+        <li>VCF scope: Hz readout in top-right corner</li>
+        <li>HPF labels: J60 mode shows correct frequencies (was showing J106 labels)</li>
+      </ul>
+    </details>
+
+    <details>
       <summary><span class="ver">2.4.6</span> Per-model DSP framework, chorus filter, SysEx fixes, AU SysEx variant</summary>
       <ul>
         <li>Sub oscillator and noise levels calibrated from Juno-6 hardware measurements (11-point tables)</li>

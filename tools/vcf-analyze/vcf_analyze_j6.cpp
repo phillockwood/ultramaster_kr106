@@ -316,21 +316,21 @@ int main(int argc, char* argv[])
     }
     fprintf(stderr, "Offset: %.2f sec\n", offset);
 
-    // Test grid
+    // Test grid -- J6 manual recording: 3s self-osc + 3s noise, no gaps
     static const int resValues[] = {0, 25, 50, 76, 101, 127};
     static const char* noteNames[] = {"C2", "C3", "C4", "C5", "C6", "C7"};
     static const int midiNotes[] = {36, 48, 60, 72, 84, 96};
     static const float targetHz[] = {62.0f, 124.0f, 248.1f, 496.1f, 992.3f, 1984.5f};
-    static const int dacVals[] = {3986, 5129, 6272, 7415, 8558, 9701};
+    static const int dacVals[] = {0, 0, 0, 0, 0, 0}; // N/A for J6
 
     int nRes = 6, nNotes = 6;
 
-    // Timing: per note = 3s osc + 0.5s gap + 3s noise + 0.5s gap = 7s
-    // Per res = 6 notes × 7s = 42s
-    float noteTime = 7.0f;     // seconds per note (osc + gap + noise + gap)
-    float noiseStart = 3.5f;   // noise-on starts 3.5s into each note slot
-    float settleSkip = 0.5f;   // skip first 0.5s for settling
-    float analyzeLen = 2.0f;   // analyze 2s of steady state
+    // Timing: per note = 3s self-osc + 3s noise = 6s, no gaps
+    // Per res = 6 notes x 6s = 36s
+    float noteTime = 6.0f;
+    float noiseStart = 3.0f;
+    float settleSkip = 0.5f;
+    float analyzeLen = 2.0f;
 
     // CSV header
     printf("res_int,res_norm,k,note,midi,dac,target_hz,peak_hz,peak_cents,peak_db,passband_db,prominence_db,rms_db,minus3db_hz,minus6db_hz,minus12db_hz,minus24db_hz,slope_db_oct\n");

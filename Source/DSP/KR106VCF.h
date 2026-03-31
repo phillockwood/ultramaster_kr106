@@ -237,15 +237,26 @@ struct VCF
   // 44.1 kHz and 96 kHz showing < 60 cent divergence vs 500+ cents
   // when compensating frq directly.
   //
-  // Coefficients fit to hardware Juno-106 resonance peak frequencies
-  // (noise through VCF, test mode 3, KBD=max, 6 resonance values ×
-  // 6 notes C2–C7) compared against model output. Previous coefficients
-  // undercompensated at moderate resonance (R=25–101) due to the max()
-  // floor engaging too early.
-  static float FreqCompensation(float k)
+  // Frequency-dependent cutoff compensation for the 4-pole digital filter.
+  //
+  // The bilinear transform warps the -3dB point of the 4-pole cascade
+  // in a frequency-dependent way. Fit to J106 hardware -3dB measurements
+  // (noise through VCF, test mode 3, KBD=max, R=0, 6 notes C2-C7).
+  //
+  // Power law: 2.004 * frq^0.162
+  //   Low frequencies get reduced (~0.7x), high frequencies boosted (~1.2x).
+  // At high resonance (k>3), the filter self-oscillates and the peak
+  // frequency IS the pole frequency -- compensation must fade to 1.0
+  // or the oscillation pitch shifts. Blend uses k^2 for a slow ramp
+  // that preserves low-Q correction through mid-resonance.
+  //
+  // frq = cutoff / sampleRate (0..1 normalized)
+  static float FreqCompensation(float k, float frq)
   {
-    float fc = 1.962f / (1.f + 0.197f * k);
-    return std::max(fc, 1.f);
+    float lowQ = 2.004f * powf(std::max(frq, 1e-5f), 0.162f);
+    // Slow blend: k^2/16 reaches 1.0 at k=4
+    float blend = std::min(k * k * 0.0625f, 1.f);
+    return lowQ + blend * (1.f - lowQ);
   }
 
   // Soft-clip resonance above k=3.0 (OTA gain compression at high feedback).
@@ -362,7 +373,7 @@ private:
     // blowing up near Nyquist.
     frq = std::min(frq, 0.85f);
     float g = tanf(frq * static_cast<float>(M_PI) * 0.5f);
-    g *= FreqCompensation(k);
+    g *= FreqCompensation(k, frq);
 
     // Precompute gains for the 4-pole cascade solution
     float g1 = g / (1.f + g);  // one-pole gain
