@@ -6,7 +6,6 @@
 #include <cstdint>
 
 #include "KR106ADSR.h"
-#include "KR106Oscillators.h"
 #include "KR106OscillatorsWT.h"
 #include "KR106VCA.h"
 #include "KR106VCF.h"

@@ -132,7 +132,7 @@ struct HPF
 
   float ProcessWith(float input, float freqHz, float g, float& hpState, float& dcState, BassBoostFilter& boost)
   {
-    if (freqHz < 0.f) return boost.Process(input);
+    if (freqHz < 0.f) return DCBlock(boost.Process(input), dcState);
     if (freqHz == 0.f) return DCBlock(input, dcState);
     float v = (input - hpState) * g / (1.f + g);
     float lp = hpState + v;
