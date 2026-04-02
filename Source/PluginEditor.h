@@ -15,7 +15,8 @@
 #include "Controls/KR106VarianceSheet.h"
 
 class KR106Editor : public juce::AudioProcessorEditor,
-                    private juce::Timer
+                    private juce::Timer,
+                    private juce::AsyncUpdater
 {
 public:
     KR106Editor(KR106AudioProcessor&);
@@ -46,6 +47,7 @@ private:
     KR106Tooltip mTooltip;
 
     float mUIScale = 1.f;
+    void handleAsyncUpdate() override;
     bool mNeedChevronRestore = true;
     bool mWasActive = true;
     int mRepaintDivider = 0;

@@ -5,8 +5,6 @@
 KR106Editor::KR106Editor(KR106AudioProcessor& p)
     : AudioProcessorEditor(p), mProcessor(p)
 {
-    setSize(940, 224);
-
     // Restore saved scale, or auto-detect: 2x on non-HiDPI, 1x on Retina.
     if (p.mUIScale > 0.f)
         mUIScale = p.mUIScale;
@@ -17,8 +15,9 @@ KR106Editor::KR106Editor(KR106AudioProcessor& p)
         mUIScale = (display && display->scale < 1.5) ? 2.f : 1.f;
         p.mUIScale = mUIScale; // persist so it survives window recreation
     }
-    if (mUIScale != 1.f)
-        setTransform(juce::AffineTransform::scale(mUIScale));
+
+    setSize(940, 224);
+    triggerAsyncUpdate(); // defer scale to next message loop (after host finishes parenting)
 
     // Load @2x images from binary data
     auto loadImg = [](const void* data, int size) {
@@ -193,7 +192,22 @@ KR106Editor::KR106Editor(KR106AudioProcessor& p)
 
 KR106Editor::~KR106Editor()
 {
+    cancelPendingUpdate();
     stopTimer();
+}
+
+void KR106Editor::handleAsyncUpdate()
+{
+    if (mUIScale != 1.f)
+    {
+        setTransform(juce::AffineTransform::scale(mUIScale));
+        // Force componentMovedOrResized with wasResized=true so the
+        // LV2/CLAP wrapper calls requestResize() with transformed bounds.
+        // setTransform alone doesn't trigger this because the logical
+        // size (getWidth/getHeight) doesn't change.
+        setSize(940, 223);
+        setSize(940, 224);
+    }
 }
 
 void KR106Editor::mouseDown(const juce::MouseEvent& e)
@@ -251,6 +265,8 @@ void KR106Editor::showSettingsMenu()
                     setTransform({});
                 else
                     setTransform(juce::AffineTransform::scale(s));
+                setSize(940, 223);
+                setSize(940, 224);
             }
             // Voice count and oversample: set via parameter system
             int voices = r == 10 ? 6 : r == 11 ? 8 : r == 12 ? 10 : 0;
