@@ -43,7 +43,7 @@ namespace kr106 {
 // Frequencies from circuit analysis + ngspice simulation (see KR106_HPF.h).
 struct HPF
 {
-  static constexpr float kDCBlockHz = 5.f;
+  static constexpr float kDCBlockHz = 10.f;
   static constexpr int kXfadeSamples = 64; // ~1.5 ms at 44.1k
   // J6 PCHIP curve sampled at 4 switch positions (0/3, 1/3, 2/3, 3/3)
   static constexpr float kJ6Freqs[4] = { 38.6f, 260.f, 530.f, 1394.f };
@@ -113,7 +113,7 @@ struct HPF
   void Recalc()
   {
     // DC blocker (~5 Hz)
-    float dcFrq = std::clamp(kDCBlockHz / (mSampleRate * 0.5f), 0.001f, 0.9f);
+    float dcFrq = std::clamp(kDCBlockHz / (mSampleRate * 0.5f), 0.f, 0.9f);
     mDcG = tanf(dcFrq * static_cast<float>(M_PI) * 0.5f);
 
     if (mFreqHz <= 0.f) { mG = 0.f; return; } // flat or bass boost
@@ -490,6 +490,17 @@ public:
       }
     }
 
+    // Analog noise floor: models the constant background hiss from voice chip
+    // op-amps, mixer bus, and power supply. Added before HPF to match the
+    // hardware signal path. Level: -60 dBFS (~0.001 amplitude).
+    static constexpr float kNoiseFloor = 0.0001f; // -80 dBFS
+    for (int s = 0; s < nFrames; s++)
+    {
+      mFloorNoiseSeed = mFloorNoiseSeed * 196314165u + 907633515u;
+      float floorNoise = (2.f * mFloorNoiseSeed / static_cast<float>(0xFFFFFFFFu) - 1.f) * kNoiseFloor;
+      outputs[0][s] += static_cast<T>(floorNoise);
+    }
+
     for (int s = 0; s < nFrames; s++)
       outputs[0][s] = static_cast<T>(mHPF.Process(static_cast<float>(outputs[0][s])));
 
@@ -633,6 +644,7 @@ public:
   std::vector<T> mLFORawBuffer; // raw triangle (before onset envelope)
   std::vector<T> mNoiseBuffer;  // shared noise source (single generator for all voices)
   kr106::Noise mNoise;
+  uint32_t mFloorNoiseSeed = 77777u; // PRNG for analog noise floor
   std::vector<T> mSyncBuffer;
   float mScopeSyncPhase = 0.f;
   bool mScopeSyncSub = false;

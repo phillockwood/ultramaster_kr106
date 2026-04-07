@@ -901,7 +901,7 @@ public:
 
       // Noise mixed from shared source (single generator, matches hardware)
       if (noiseAT > 0.f)
-        oscOut += static_cast<float>(noiseBuffer[i]) * kNoiseAmp * noiseAT;
+        oscOut += static_cast<float>(noiseBuffer[i]) * mOsc.mNoiseAmp * noiseAT;
       float signal = mVCF.Process(oscOut, vcfCPS, mVcfRes);
 
       // --- VCA (BA662 OTA, driven by model-specific exponential converter) ---

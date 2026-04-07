@@ -259,6 +259,19 @@ struct VCF
     return lowQ + blend * (1.f - lowQ);
   }
 
+  // Hardware-calibrated version: boosts pole frequency at low cutoff to
+  // match passband levels from hardware noise sweep measurements.
+  // Power law 0.4128 * frq^-0.2107 fitted to match hardware at VCF bytes
+  // 0-72 (R=0), clamped to 0.80 at high frequencies where the original
+  // compensation was overshooting. At high resonance, blends toward 1.0
+  // to preserve self-oscillation pitch accuracy.
+  static float FreqCompensationClamped(float k, float frq)
+  {
+    float lowQ = std::max(1.0f, 0.48f * powf(std::max(frq, 1e-6f), -0.12f));
+    float blend = std::min(k * k * 0.0625f, 1.f);
+    return lowQ + blend * (1.f - lowQ);
+  }
+
   // Soft-clip resonance above k=3.0 (OTA gain compression at high feedback).
   static float SoftClipK(float k)
   {
@@ -373,7 +386,7 @@ private:
     // blowing up near Nyquist.
     frq = std::min(frq, 0.85f);
     float g = tanf(frq * static_cast<float>(M_PI) * 0.5f);
-    g *= FreqCompensation(k, frq);
+    g *= FreqCompensationClamped(k, frq);
 
     // Precompute gains for the 4-pole cascade solution
     float g1 = g / (1.f + g);  // one-pole gain

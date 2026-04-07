@@ -6,10 +6,22 @@
 
 // Oscillator mix constants (from hardware measurements)
 namespace kr106 {
-static constexpr float kSawAmp = 0.5f;     // SAW is 0v to 12v
-static constexpr float kPulseAmp = 0.5f;   // PULSE is 0v to +12v TL074
-static constexpr float kSubAmp = 0.5942f;  // SUB at +1.5 dB over saw (J6 measurement)
-static constexpr float kNoiseAmp = 0.5f;   // Noise at 0 dB = same level as saw
+
+// J6/J60: BA662 VCA per waveform, calibrated from Juno-6 recordings
+static constexpr float kSawAmpJ6    = 0.5f;      // SAW is 0v to 12v
+static constexpr float kPulseAmpJ6  = 0.5f;      // PULSE is 0v to +12v TL074
+static constexpr float kSubAmpJ6    = 0.5942f;   // SUB at +1.5 dB over saw (J6 measurement)
+static constexpr float kNoiseAmpJ6  = 1.f;       // Noise level (J6 calibration)
+
+// J106: MC5534 pre-mixed saw/pulse, separate sub and noise mixing resistors.
+// Calibrated from hardware 106_calibration recording (peak-to-peak matched
+// to noise RMS at HPF flat, VCF wide open).
+// Sub/Saw ratio: 1.59x (+4.0 dB), matches 27K/39K mixing resistor ratio.
+static constexpr float kSawAmpJ106   = 0.5f;     // scaled to match J6 saw level
+static constexpr float kPulseAmpJ106 = 0.417f;   // 0.834x saw (hardware measurement)
+static constexpr float kSubAmpJ106   = 0.586f;   // 1.17x saw (+4.0 dB, 27K mixing R)
+static constexpr float kNoiseAmpJ106 = 1.385f;   // 2.77x saw (39K mixing R, hardware cal)
+
 static constexpr float kSwitchRamp = 1.f / 64.f; // ~1.5ms at 44.1k
 } // namespace kr106
 
@@ -120,6 +132,12 @@ struct OscillatorsWT {
 
   bool mPulseInvert = false; // J106: inverted duty cycle (see Oscillators.h)
 
+  // Per-model mix levels (set by Voice when model changes)
+  float mSawAmp   = kSawAmpJ6;
+  float mPulseAmp = kPulseAmpJ6;
+  float mSubAmp   = kSubAmpJ6;
+  float mNoiseAmp = kNoiseAmpJ6;
+
   // Ramp curvature: subtle quadratic bow matching hardware measurements.
   // Applied as phase warp before table lookup. At 0.03 the spectral
   // effect is below -100 dB so it doesn't meaningfully affect aliasing.
@@ -216,8 +234,8 @@ struct OscillatorsWT {
     mPulseGain += ((pulseOn ? 1.f : 0.f) - mPulseGain) * mSwitchRamp;
     mSubGain += ((subOn ? 1.f : 0.f) - mSubGain) * mSwitchRamp;
 
-    float out = saw * kSawAmp * mSawGain + pulse * kPulseAmp * mPulseGain +
-                sub * kSubAmp * subLevel * mSubGain;
+    float out = saw * mSawAmp * mSawGain + pulse * mPulseAmp * mPulseGain +
+                sub * mSubAmp * subLevel * mSubGain;
 
     // Noise is now mixed at the voice level from a shared source
     // (single generator for all voices, matching real hardware).
