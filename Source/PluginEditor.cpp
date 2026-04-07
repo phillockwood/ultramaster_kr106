@@ -231,7 +231,7 @@ void KR106Editor::resized()
 
         // Snap to nearest preset to avoid floating-point drift from
         // host rounding (Logic/AU can round pixel dimensions)
-        for (float preset : { 1.f, 1.5f, 2.f })
+        for (float preset : { 1.f, 1.5f, 2.f, 3.f })
             if (std::abs(scale - preset) < 0.02f)
                 scale = preset;
 
@@ -258,7 +258,7 @@ void KR106Editor::applyScale(float s)
 
 float KR106Editor::maxScaleForScreen() const
 {
-    constexpr float kMaxZoom = 2.f;
+    constexpr float kMaxZoom = 3.f;
     constexpr float kScreenMargin = 0.9f; // use at most 90% of the screen
 
     auto& displays = juce::Desktop::getInstance().getDisplays();
@@ -301,6 +301,7 @@ void KR106Editor::showSettingsMenu()
     items.push_back(KR106MenuItem::makeRadio(1,  "100%", mUIScale == 1.f));
     items.push_back(KR106MenuItem::makeRadio(2,  "150%", mUIScale == 1.5f));
     items.push_back(KR106MenuItem::makeRadio(3,  "200%", mUIScale == 2.f));
+    items.push_back(KR106MenuItem::makeRadio(4,  "300%", mUIScale == 3.f));
     items.push_back(KR106MenuItem::sep());
     items.push_back(KR106MenuItem::makeRadio(10, "06 Voices",  vc == 6));
     items.push_back(KR106MenuItem::makeRadio(11, "08 Voices",  vc == 8));
@@ -324,7 +325,7 @@ void KR106Editor::showSettingsMenu()
         [this](int r)
         {
             if (r == 0) { mSettingsMenu.reset(); return; }
-            float s = r == 1 ? 1.f : r == 2 ? 1.5f : r == 3 ? 2.f : 0.f;
+            float s = r == 1 ? 1.f : r == 2 ? 1.5f : r == 3 ? 2.f : r == 4 ? 3.f : 0.f;
             if (s > 0.f && s != mUIScale)
                 applyScale(s);
             // Voice count and oversample: set via parameter system
