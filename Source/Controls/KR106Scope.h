@@ -764,7 +764,7 @@ private:
         float fcSlider = fc;
         float sr = static_cast<float>(mProcessor->getSampleRate());
         float frqNorm = fc / std::max(sr, 1.f);
-        fc *= kr106::VCF::FreqCompensation(k, frqNorm);
+        fc *= kr106::VCF::FreqCompensationClamped(k, frqNorm * 0.25f);
         float comp = kr106::VCF::InputComp(k);
 
         // Display range

@@ -108,6 +108,7 @@ struct VCF
   uint32_t mNoiseSeed = 123456789u; // thermal noise PRNG state
   float mInputEnv = 0.f;           // peak envelope follower for noise suppression
   float mEnvDecay = 0.999f;        // per-sample decay for mInputEnv (22ms time constant)
+  float mFreqComp = 1.f;           // cached FreqCompensation at base sample rate
   float mSampleRate = 44100.f;     // cached for SetOversample()
 
   // Two cascaded 2x polyphase stages (used as 1+1 for 4x, or just 1 for 2x).
@@ -146,7 +147,7 @@ struct VCF
   void SetOversample(int factor)
   {
     int prev = mOversample;
-    mOversample = (factor == 2) ? 2 : 4;
+    mOversample = (factor <= 1) ? 1 : (factor == 2) ? 2 : 4;
     mEnvDecay = expf(-1.f / (0.022f * mSampleRate * static_cast<float>(mOversample)));
     // Don't reset filter state (mS) — preserve pitch continuity.
     // Only clear stage-2 resamplers when switching to 4x, since they were
@@ -313,11 +314,20 @@ struct VCF
   float Process(float input, float frq, float res)
   {
     frq = std::min(frq, 0.95f);
-   
+
+    // Compute FreqCompensation at the 4x-equivalent rate (matches tuning).
+    // Always use frq/4 regardless of actual oversample setting so the
+    // compensation curve is consistent across all modes.
+    float k = mJ106Res ? ResK_J106(res) : ResK_J6(res);
+    k = SoftClipK(k);
+    mFreqComp = FreqCompensationClamped(k, frq * 0.25f);
+
     if (mOversample == 4)
       return Process4x(input, frq, res);
-    else
+    else if (mOversample == 2)
       return Process2x(input, frq, res);
+    else
+      return ProcessSample(input, frq, res);
   }
 
 private:
@@ -375,7 +385,7 @@ private:
     mInputEnv = std::max(fabsf(input), mInputEnv * mEnvDecay);
     float stateEnergy = fabsf(mS[0]) + fabsf(mS[1]) + fabsf(mS[2]) + fabsf(mS[3]);
     float energy = std::max(mInputEnv, stateEnergy);
-    float noiseLevel = 1e-2f / (1.f + energy * 1000.f);
+    float noiseLevel = 1e-2f / (static_cast<float>(mOversample) * (1.f + energy * 1000.f));
     input += white * noiseLevel;
 
     // Resonance CV: external transistor feeds BA662 OTA control current.
@@ -386,7 +396,7 @@ private:
     // blowing up near Nyquist.
     frq = std::min(frq, 0.85f);
     float g = tanf(frq * static_cast<float>(M_PI) * 0.5f);
-    g *= FreqCompensationClamped(k, frq);
+    g *= mFreqComp; // pre-computed at base rate in Process()
 
     // Precompute gains for the 4-pole cascade solution
     float g1 = g / (1.f + g);  // one-pole gain

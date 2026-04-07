@@ -9,7 +9,7 @@
 #ifdef NDEBUG
   #define KR106_DEBUG 0
 #else
-  #define KR106_DEBUG 0
+  #define KR106_DEBUG 1
 #endif
 #if KR106_DEBUG
 static void dbgLog(const juce::String& msg)
@@ -21,7 +21,7 @@ static void dbgLog(const juce::String& msg)
 static void dbgLog(const juce::String&) {}
 #endif
 
-#define KR106_DEBUG_TRANSPORT 1
+#define KR106_DEBUG_TRANSPORT 0
 #if KR106_DEBUG_TRANSPORT
 static void dbgTransport(const juce::String& msg)
 {
@@ -399,8 +399,8 @@ KR106AudioProcessor::KR106AudioProcessor()
       if (v == 6 || v == 8 || v == 10) return juce::String(v);
       return juce::String(6); // snap to nearest valid
     });
-  addSwitch(kSettingOversample,  "VCF Oversample",     4, 2, 4,
-    [](int v, int) { return juce::String(v) + "x"; });
+  addSwitch(kSettingOversample,  "VCF Oversample",     4, 1, 4,
+    [](int v, int) { return v <= 1 ? juce::String("Off") : juce::String(v) + "x"; });
   addBool(kSettingIgnoreVel,     "Ignore Velocity",    true);
   addBool(kSettingArpLimitKbd,   "Arp Limit Kbd",      true);
   addBool(kSettingArpSync,       "Arp Sync Host",      false);
@@ -1100,7 +1100,8 @@ void KR106AudioProcessor::parameterChanged(int paramIdx, float newValue)
   }
   else if (paramIdx == kSettingOversample)
   {
-    int os = juce::roundToInt(newValue) <= 3 ? 2 : 4;
+    int v = juce::roundToInt(newValue);
+    int os = (v <= 1) ? 1 : (v <= 3) ? 2 : 4;
     mVcfOversample = os;
     mDSP.ForEachVoice([os](kr106::Voice<float>& voice) {
       voice.mVCF.SetOversample(os);
@@ -1443,7 +1444,8 @@ void KR106AudioProcessor::loadGlobalSettings()
     if (p) p->setValueNotifyingHost(p->convertTo0to1(val));
   };
   setParamFromSetting(kSettingVoices,      static_cast<float>((int)KR106PresetManager::getSetting("voiceCount", 6)));
-  setParamFromSetting(kSettingOversample,  static_cast<float>(((int)KR106PresetManager::getSetting("vcfOversample", 4) == 2) ? 2 : 4));
+  { int os = (int)KR106PresetManager::getSetting("vcfOversample", 4);
+    setParamFromSetting(kSettingOversample, static_cast<float>(os <= 1 ? 1 : os <= 3 ? 2 : 4)); }
   setParamFromSetting(kSettingIgnoreVel,   (bool)KR106PresetManager::getSetting("ignoreVelocity", true)  ? 1.f : 0.f);
   setParamFromSetting(kSettingArpLimitKbd, (bool)KR106PresetManager::getSetting("arpLimitKbd", true)     ? 1.f : 0.f);
   setParamFromSetting(kSettingArpSync,     (bool)KR106PresetManager::getSetting("arpSyncHost", false)    ? 1.f : 0.f);

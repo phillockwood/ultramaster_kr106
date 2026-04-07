@@ -2,7 +2,7 @@
 #include "BinaryData.h"
 #include "Controls/KR106QwertyDiagram.h"
 
-#define KR106_DEBUG_RESIZE 0
+#define KR106_DEBUG_RESIZE 1
 #if KR106_DEBUG_RESIZE
 #include "KR106PresetManager.h"
 static void dbgResize(const juce::String& msg)
@@ -204,8 +204,8 @@ KR106Editor::KR106Editor(KR106AudioProcessor& p)
     mTooltip.setVisible(false);
     mTooltip.setAlwaysOnTop(true);
 
-    // Allow host (Reaper, Logic, etc.) to offer drag-resize handles.
-    // Lock aspect ratio so the UI scales uniformly.
+    // Enable host drag-resize. Lock aspect ratio so the UI scales uniformly.
+    // Host provides resize handles for VST3/AU/LV2/CLAP/standalone.
     setResizable(true, false);
     setResizeLimits(kBaseWidth, kBaseHeight, kBaseWidth * 4, kBaseHeight * 4);
     getConstrainer()->setFixedAspectRatio(
@@ -296,6 +296,7 @@ void KR106Editor::showSettingsMenu()
     items.push_back(KR106MenuItem::makeRadio(12, "10 Voices", vc == 10));
     items.push_back(KR106MenuItem::sep());
     int os = mProcessor.mVcfOversample;
+    items.push_back(KR106MenuItem::makeRadio(32, "VCF Oversample Off", os == 1));
     items.push_back(KR106MenuItem::makeRadio(30, "VCF Oversample 2x", os == 2));
     items.push_back(KR106MenuItem::makeRadio(31, "VCF Oversample 4x", os == 4));
     // Right column                                                    // index 10
@@ -323,7 +324,7 @@ void KR106Editor::showSettingsMenu()
                 auto* p = mProcessor.getParam(kSettingVoices);
                 p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(voices)));
             }
-            int newOS = r == 30 ? 2 : r == 31 ? 4 : 0;
+            int newOS = r == 32 ? 1 : r == 30 ? 2 : r == 31 ? 4 : 0;
             if (newOS > 0 && newOS != mProcessor.mVcfOversample)
             {
                 auto* p = mProcessor.getParam(kSettingOversample);
@@ -354,7 +355,7 @@ void KR106Editor::showSettingsMenu()
                 return;
             }
             mProcessor.saveGlobalSettings();
-        }, 10);
+        }, 12);
 
     int menuH = mSettingsMenu->calcHeight();
     int menuW = mSettingsMenu->calcWidth();
@@ -621,9 +622,15 @@ bool KR106Editor::keyStateChanged(bool /*isKeyDown*/)
 
 void KR106Editor::paint(juce::Graphics& g)
 {
-    // Draw @2x background scaled to fill the editor
+    // Black fill for any uncovered area (when host allows non-aspect-ratio sizes)
+    g.fillAll(juce::Colours::black);
+
+    // Draw @2x background at the aspect-ratio-constrained size (matching mContent)
+    float scale = mUIScale;
+    float bgW = kBaseWidth * scale;
+    float bgH = kBaseHeight * scale;
     g.drawImage(mBackground,
-                0.f, 0.f, (float)getWidth(), (float)getHeight(),
+                0.f, 0.f, bgW, bgH,
                 0, 0, mBackground.getWidth(), mBackground.getHeight());
 }
 

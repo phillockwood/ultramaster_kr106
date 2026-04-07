@@ -8,7 +8,7 @@
 #include "KR106ADSR.h"
 #include "KR106OscillatorsWT.h"
 #include "KR106VCA.h"
-#include "KR106VCF.h"
+#include "KR106VCF_OPTIMIZED.h"
 #include "KR106VcfFreqJ106.h"
 
 // Complete KR-106 voice: oscillators -> VCF -> ADSR -> VCA

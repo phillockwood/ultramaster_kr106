@@ -188,8 +188,10 @@ struct LFO
 
   static float lfoFreqJ106(float t)
   {
+    // Two-cycle: LFO updates every other main-loop iteration ($074E),
+    // so effective tick rate is half the 238.1 Hz loop rate.
     float coeff = lfoSpeedCoeff(t * 127.f);
-    return coeff * kDelayTickRate / 16384.f;
+    return coeff * (kDelayTickRate * 0.5f) / 16384.f;
   }
 
   void SetRate(float slider, float sampleRate)

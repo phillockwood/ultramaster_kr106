@@ -349,8 +349,8 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
           }
         }
       }
-      bool portaOn = (mPortaMode <= 1);
-      ForEachVoice([portaOn](kr106::Voice<T>& v) { v.mPortaEnabled = portaOn; });
+      // All three modes support portamento (matches real Juno-106)
+      ForEachVoice([](kr106::Voice<T>& v) { v.mPortaEnabled = true; });
       break;
     }
     case kPortaRate: {
