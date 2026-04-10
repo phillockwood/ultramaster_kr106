@@ -134,6 +134,7 @@ struct VCF
   bool  mCacheJ106 = false;
   float mCacheK = 0.f;
   float mCacheG = 0.f;
+  float mCacheFreqGain = 1.f;
 
   // ----- per-Process() coefficients -----
   struct Coeffs
@@ -146,6 +147,7 @@ struct VCF
     float invKFbScale;
     float hfFade;        // dfGain HF rolloff
     float noiseLevel;    // adaptive thermal noise (control-rate)
+    float outputScale;   // freq+res dependent output attenuation
   } mC;
 
   VCF()
@@ -260,9 +262,23 @@ struct VCF
   // Input Q compensation: BA662 differential topology feeds input through
   // R5(47K) alongside LP4 feedback on R3(100K). Higher resonance boosts
   // the input, counteracting passband volume drop.
-  static float InputComp(float k)
+  //
+  // Frequency-dependent gain: OTA bias current affects passband transmission.
+  // Power law fitted to 10x10 hardware noise sweep (96 kHz, R=0).
+  // freqGain should be pre-computed and cached (contains powf).
+  static float InputComp(float k, float freqGain)
   {
-    return 0.379f + 0.087f * k;
+    // Blend freqGain toward 0.85 at high resonance (not 1.0 — hardware
+    // passband still drops slightly at high freq + high res).
+    float blend = std::min(k * k * 0.0625f, 1.f);
+    float fg = freqGain + blend * (0.85f - freqGain);
+    return (0.379f + 0.087f * k) * fg;
+  }
+
+  static float FreqGain(float frq)
+  {
+    float fg = powf(std::max(frq, 1e-6f) * (1.f / 0.00445f), -0.15f);
+    return std::clamp(fg, 0.55f, 1.3f);
   }
 
   static constexpr float kOTAScale = 0.35f;
@@ -314,6 +330,7 @@ struct VCF
       // tuning curve is consistent across oversample modes.
       float fc = FreqCompensationClamped(k, frq * 0.25f);
       mCacheG = tanf(frqOver * static_cast<float>(M_PI) * 0.5f) * fc;
+      mCacheFreqGain = FreqGain(frq);
     }
 
     // ---- Cheap per-Process derivations from cached k, g ----
@@ -324,6 +341,24 @@ struct VCF
     const float g1_3 = g1_2 * g1;
     const float G    = g1_2 * g1_2;
 
+    // Frequency-dependent self-oscillation amplitude limit.
+    // On hardware, IR3109 OTA gain compression increases at higher bias
+    // currents (higher cutoff), limiting resonance peak amplitude.
+    // We model this by scaling kFbScale up at high frequency, which drives
+    // the feedback tanh harder and stabilizes the limit cycle at a lower
+    // amplitude -- without changing k (preserving peak shape/Q).
+    float fbBoost = 1.f;
+    {
+      float frqRef = 0.01f; // ~500 Hz at 96k
+      if (mCacheFrq > frqRef)
+      {
+        // Power law: boost = (frq/frqRef)^0.3
+        // At 1kHz: 1.23, at 4kHz: 1.62, at 10kHz: 2.0, at 33kHz: 2.7
+        fbBoost = powf(mCacheFrq / frqRef, 0.3f);
+        fbBoost = std::min(fbBoost, 4.f); // cap
+      }
+    }
+
     mC.k    = k;
     mC.g    = g;
     mC.g1   = g1;
@@ -331,9 +366,19 @@ struct VCF
     mC.g1_3 = g1_3;
     mC.G    = G;
     mC.invDen      = 1.f / (1.f + k * G);
-    mC.comp        = InputComp(k);
-    mC.kFbScale    = 4.20f * std::clamp((k - 3.5f) * 0.8f, 0.3f, 1.f);
+    mC.comp        = InputComp(k, mCacheFreqGain);
+    mC.kFbScale    = 4.20f * std::clamp((k - 3.5f) * 0.8f, 0.3f, 1.f) * fbBoost;
     mC.invKFbScale = 1.f / mC.kFbScale;
+
+    // Output attenuation at high freq + high res: models the IR3109's
+    // reduced output swing at high bias currents under heavy feedback.
+    // Only active when both cutoff and resonance are high.
+    {
+      float frqFactor = std::clamp((mCacheFrq - 0.02f) * 20.f, 0.f, 1.f); // ramps 0->1 from 1kHz to ~3kHz
+      float resFactor = std::clamp((k - 2.f) * 0.5f, 0.f, 1.f);           // ramps 0->1 from k=2 to k=4
+      float atten = frqFactor * resFactor * 0.5f;                           // max 0.5 = -6 dB
+      mC.outputScale = 1.f - atten;
+    }
 
     {
       float overScale = (mOversample == 4) ? 0.25f
@@ -441,7 +486,7 @@ private:
 
     // Output gain: InputComp * outputGain preserves passband level (1.22x).
     // Self-osc level calibrated from hardware: ~1.07x pulse at R=127.
-    return lp4 * 3.22f;
+    return lp4 * 3.22f * mC.outputScale;
   }
 };
 

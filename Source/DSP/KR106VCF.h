@@ -287,9 +287,21 @@ struct VCF
   // Input Q compensation: BA662 differential topology feeds input through
   // R5(47K) alongside LP4 feedback on R3(100K). Higher resonance boosts
   // the input, counteracting passband volume drop.
-  static float InputComp(float k)
+  //
+  // Frequency-dependent gain: OTA bias current affects passband transmission.
+  // At low cutoff (small frq) the OTAs run at lower bias and pass more signal
+  // per unit input; at high cutoff they saturate earlier. Power law fitted to
+  // 10x10 hardware noise sweep (96 kHz, R=0). Crossover at frq~0.0045 (427 Hz).
+  static float InputComp(float k, float frq)
   {
-      return 0.379f + 0.087f * k;
+      float qComp = 0.379f + 0.087f * k;
+      float freqGain = powf(std::max(frq, 1e-6f) * (1.f / 0.00445f), -0.15f);
+      freqGain = std::clamp(freqGain, 0.55f, 1.3f);
+      // Blend freqGain toward 0.85 at high resonance (not 1.0 — hardware
+      // passband still drops slightly at high freq + high res).
+      float blend = std::min(k * k * 0.0625f, 1.f);
+      freqGain = freqGain + blend * (0.85f - freqGain);
+      return qComp * freqGain;
   }
 
   static constexpr float kOTAScale = 0.35f;
@@ -394,6 +406,7 @@ private:
 
     // Clamp frq for the bilinear transform — prevents tan() from
     // blowing up near Nyquist.
+    float frqUnclamped = frq;
     frq = std::min(frq, 0.85f);
     float g = tanf(frq * static_cast<float>(M_PI) * 0.5f);
     g *= mFreqComp; // pre-computed at base rate in Process()
@@ -407,7 +420,18 @@ private:
 
     float S = mS[0] * g1 * g1 * g1 + mS[1] * g1 * g1 + mS[2] * g1 + mS[3];
 
-    float comp = InputComp(k);
+    float comp = InputComp(k, frq);
+
+    // Frequency-dependent feedback drive (matches optimized VCF)
+    float fbBoost = 1.f;
+    {
+      float frqRef = 0.01f;
+      if (frqUnclamped > frqRef)
+      {
+        fbBoost = powf(frqUnclamped / frqRef, 0.3f);
+        fbBoost = std::min(fbBoost, 4.f);
+      }
+    }
 
     // BA662 feedback path: models the R3(100K)/R1(1.5K) voltage divider
     // that attenuates the LP4 output before the BA662 differential pair.
@@ -424,7 +448,7 @@ private:
     // rather than in millivolts. The k-dependent scaling reduces
     // effective drive at lower resonance (R=0.9 vs R=1.0), keeping
     // the amplitude gap within ~1 dB across settings.
-    float kFbScale = 4.20f * std::clamp((k - 3.5f) * 0.8f, 0.3f, 1.f);
+    float kFbScale = 4.20f * std::clamp((k - 3.5f) * 0.8f, 0.3f, 1.f) * fbBoost;
     float fbSig = OTASat(S * kFbScale) / kFbScale;
 
     float u = (input * comp - k * fbSig) / (1.f + k * G);
@@ -483,7 +507,11 @@ private:
     // amplitude is set by kFbScale and is independent of input scaling.
     // InputComp * outputGain preserves passband level (1.22x).
     // Self-osc level calibrated from hardware: ~1.07x pulse at R=127.
-    return lp4 * 3.22f;
+    // Output attenuation at high freq + high res (matches optimized VCF).
+    float frqFactor = std::clamp((frqUnclamped - 0.02f) * 20.f, 0.f, 1.f);
+    float resFactor = std::clamp((k - 2.f) * 0.5f, 0.f, 1.f);
+    float outputScale = 1.f - frqFactor * resFactor * 0.5f;
+    return lp4 * 3.22f * outputScale;
   }
 };
 
