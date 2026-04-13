@@ -958,7 +958,8 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     if (mArpSyncHost)
     {
       mDSP.mArp.mSyncToHost = true;
-      mDSP.mArp.mHostPlaying = mCachedHavePPQ ? mCachedPlaying : true;
+      // Without PPQ, beat-grid sync can't work -- use free-run path
+      mDSP.mArp.mHostPlaying = mCachedHavePPQ ? mCachedPlaying : false;
       mDSP.mArp.mHostBPM = mCachedHaveBPM ? mCachedBPM : 120.0;
       mDSP.mArp.mHostBeatPos = mCachedPPQ;
     }
