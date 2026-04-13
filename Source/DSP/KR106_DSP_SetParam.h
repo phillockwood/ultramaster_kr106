@@ -71,10 +71,14 @@ void KR106DSP<T>::SetParam(int paramIdx, double value)
       });
       break;
     }
-    case kVcfRes:
-      // J106: linear passthrough (no scaling in firmware — pot value used directly)
-      ForEachVoice([value](kr106::Voice<T>& v) { v.mVcfRes = static_cast<float>(value); });
+    case kVcfRes: {
+      float resByte = static_cast<float>(value) * 127.f;
+      ForEachVoice([value, resByte](kr106::Voice<T>& v) {
+        v.mVcfRes = static_cast<float>(value);
+        v.mVCF.mCacheResByte = resByte;
+      });
       break;
+    }
     case kVcfEnv: {
       mSliderVcfEnv = static_cast<float>(value);
       uint8_t envModInt = static_cast<uint8_t>(mSliderVcfEnv * 254.f);

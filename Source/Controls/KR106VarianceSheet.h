@@ -31,6 +31,7 @@ public:
             mAnalogNoiseKnob = mulToKnob(mProcessor->mDSP.mNoiseFloorMul);
             mMainsNoiseKnob = mulToKnob(mProcessor->mDSP.mMainsMul);
             mClockNoiseKnob = mulToKnob(mProcessor->mDSP.mChorus.mClockMul);
+            mBbdDriveKnob = mProcessor->mDSP.mChorus.mBbdDriveUser / 100.f;
             // Note: chorus mAnalogMul is always kept in sync with mNoiseFloorMul
         }
     }
@@ -58,16 +59,15 @@ public:
         int h = getHeight();
         int activeVoices = mProcessor ? mProcessor->mVoiceCount : 6;
 
-        // Title row
+        // Title row: 3 cols for title, 4 cols for buttons (right-aligned)
+        int colW7 = w / kTotalCols;
         g.setColour(bright());
-        g.drawSingleLineText("COMPONENT VARIANCE",
-                             4, kRowH - 2);
+        g.drawSingleLineText("COMPONENT VARIANCE", 4, kRowH - 2);
 
-        // Tune buttons (right side of title row)
-        static constexpr int kBtnW = 90;
-        mTunePoorlyRect  = { w - kBtnW * 3, 0, kBtnW, kRowH };
-        mTuneLazyRect    = { w - kBtnW * 2, 0, kBtnW, kRowH };
-        mTunePerfectRect = { w - kBtnW,     0, kBtnW, kRowH };
+        mTunePoorlyRect  = { colW7 * 3, 0, colW7, kRowH };
+        mTuneLazyRect    = { colW7 * 4, 0, colW7, kRowH };
+        mTunePerfectRect = { colW7 * 5, 0, colW7, kRowH };
+        mCloseRect       = { colW7 * 6, 0, w - colW7 * 6, kRowH };
 
         auto drawBtn = [&](juce::Rectangle<int>& r, const char* label, int hoverId) {
             if (mHoverRow == hoverId)
@@ -78,15 +78,16 @@ public:
             g.setColour(bright());
             g.drawSingleLineText(label, r.getX() + 4, r.getBottom() - 2);
         };
-        drawBtn(mTunePoorlyRect,  " Out of Tune ",  -2);
-        drawBtn(mTuneLazyRect,    " Human Tune ",   -3);
-        drawBtn(mTunePerfectRect, " Robot Tune ",   -4);
+        drawBtn(mTunePoorlyRect,  "OUT OF TUNE",  -2);
+        drawBtn(mTuneLazyRect,    "HUMAN TUNE",   -3);
+        drawBtn(mTunePerfectRect, "ROBOT TUNE",   -4);
+        drawBtn(mCloseRect,       "CLOSE",         -9);
 
-        // Noise row: 3 controls side by side
+        // Noise/drive row: 4 controls using voice-grid column width
         {
             int y = kRowH;
             int cellH = kRowH;
-            int cellW = w / 3;
+            int cellW = w / kTotalCols; // not used directly, see colW7 below
 
             auto paintNoiseCell = [&](int hitId, int x0, int cw, const char* label, float knobVal) {
                 bool isHover = (mHoverRow == hitId);
@@ -108,17 +109,17 @@ public:
                                      x0 + cw - 8, y + cellH - 2,
                                      juce::Justification::right);
             };
-            paintNoiseCell(-5, 0,          cellW,         "ANALOG NOISE", mAnalogNoiseKnob);
-            paintNoiseCell(-6, cellW,      cellW,         "MAINS NOISE",  mMainsNoiseKnob);
-            paintNoiseCell(-7, cellW * 2,  w - cellW * 2, "CLOCK NOISE",  mClockNoiseKnob);
+            int colW7 = w / kTotalCols;
+            paintNoiseCell(-5, 0,            colW7,  "ANALOG",    mAnalogNoiseKnob);
+            paintNoiseCell(-6, colW7,        colW7,  "MAINS",     mMainsNoiseKnob);
+            paintNoiseCell(-7, colW7 * 2,    colW7,  "CLOCK",     mClockNoiseKnob);
+            paintNoiseCell(-8, colW7 * 3,    colW7,  "BBD DRIVE", mBbdDriveKnob);
         }
 
-        // Header row (inverted: bright bg, black text)
+        // Header row (bright text on dark bg)
         int headerY = 2 * kRowH;
         int headerH = kRowH;
         g.setColour(bright());
-        g.fillRect(0, headerY, w, headerH);
-        g.setColour(bg());
         g.drawSingleLineText("VOICE", 4, headerY + headerH - 2);
         for (int p = 0; p < kNumParams; p++)
         {
@@ -209,13 +210,16 @@ public:
 
     void mouseDown(const juce::MouseEvent& e) override
     {
+        // Close button
+        if (mCloseRect.contains(e.getPosition())) { dismiss(); return; }
+
         // Check tune buttons
         if (mTunePoorlyRect.contains(e.getPosition()))  { tuneRandomize(1.f);  return; }
         if (mTuneLazyRect.contains(e.getPosition()))    { tuneRandomize(0.2f); return; }
         if (mTunePerfectRect.contains(e.getPosition())) { tunePerfect();       return; }
 
         auto [row, col] = hitTest(e.getPosition());
-        if (row == -5 || row == -6 || row == -7)
+        if (row <= -5 && row >= -8)
         {
             mSelectedRow = row;
             mSelectedCol = 0;
@@ -239,7 +243,7 @@ public:
 
     void mouseDrag(const juce::MouseEvent& e) override
     {
-        if (mSelectedRow == -5 || mSelectedRow == -6 || mSelectedRow == -7)
+        if (mSelectedRow <= -5 && mSelectedRow >= -8)
         {
             float delta = (mDragStartY - e.y) * (1.f / 80.f);
             noiseKnob(mSelectedRow) = std::clamp(mDragStartValue + delta, 0.f, 1.f);
@@ -279,7 +283,34 @@ public:
             return true;
         }
 
-        if (mSelectedRow == -5 || mSelectedRow == -6 || mSelectedRow == -7)
+        // Tab / Shift+Tab: navigate between rows
+        // Order: noise(-5..-8) -> voice 0 -> voice 1 -> ... -> voice 9
+        if (key == juce::KeyPress::tabKey)
+        {
+            if (key.getModifiers().isShiftDown())
+            {
+                if (mSelectedRow == 0)
+                    { mSelectedRow = -8; }           // voice 0 -> last noise cell
+                else if (mSelectedRow > 0)
+                    mSelectedRow--;                   // voice N -> voice N-1
+                else if (mSelectedRow == -5)
+                    { mSelectedRow = kMaxVoices - 1; mSelectedCol = 0; } // wrap to last voice
+            }
+            else
+            {
+                if (mSelectedRow <= -5 && mSelectedRow >= -8)
+                    { mSelectedRow = 0; mSelectedCol = 0; } // noise -> voice 0
+                else if (mSelectedRow < kMaxVoices - 1)
+                    mSelectedRow++;                   // voice N -> voice N+1
+                else
+                    mSelectedRow = -5;                // wrap to noise row
+            }
+            repaint();
+            return true;
+        }
+
+        // Noise/drive row
+        if (mSelectedRow <= -5 && mSelectedRow >= -8)
         {
             float& knob = noiseKnob(mSelectedRow);
             if (key == juce::KeyPress::upKey)
@@ -293,6 +324,18 @@ public:
             {
                 knob = std::clamp(knob - 0.01f, 0.f, 1.f);
                 applyNoise();
+                repaint();
+                return true;
+            }
+            if (key == juce::KeyPress::leftKey)
+            {
+                if (mSelectedRow < -5) mSelectedRow++;
+                repaint();
+                return true;
+            }
+            if (key == juce::KeyPress::rightKey)
+            {
+                if (mSelectedRow > -8) mSelectedRow--;
                 repaint();
                 return true;
             }
@@ -374,6 +417,7 @@ private:
         mAnalogNoiseKnob = 0.f;
         mMainsNoiseKnob = 0.f;
         mClockNoiseKnob = 0.f;
+        mBbdDriveKnob = 0.f;
         applyNoise();
         repaint();
     }
@@ -397,11 +441,20 @@ private:
             for (int p = 0; p < kNumParams; p++)
                 applyToVoice(v, p);
         }
+        // Noise/drive: Human Tune = unity (0.5), Out of Tune = elevated (0.65)
+        float noiseLevel = (scale > 0.5f) ? 0.65f : 0.5f;
+        mAnalogNoiseKnob = noiseLevel;
+        mMainsNoiseKnob = noiseLevel;
+        mClockNoiseKnob = noiseLevel;
+        mBbdDriveKnob = noiseLevel;
+        applyNoise();
         repaint();
     }
 
     std::pair<int, int> hitTest(juce::Point<int> pos) const
     {
+        if (mCloseRect.contains(pos)) return { -9, -1 };
+
         if (pos.y < kRowH)
         {
             if (mTunePoorlyRect.contains(pos))  return { -2, -1 };
@@ -409,13 +462,16 @@ private:
             if (mTunePerfectRect.contains(pos)) return { -4, -1 };
         }
 
-        // Noise row: y = 1*kRowH to 2*kRowH, three cells
+        // Noise/drive row: y = 1*kRowH to 2*kRowH, 7 columns (4 used)
         if (pos.y >= kRowH && pos.y < 2 * kRowH)
         {
-            int cellW = getWidth() / 3;
-            if (pos.x < cellW)      return { -5, 0 };
-            if (pos.x < cellW * 2)  return { -6, 0 };
-            return { -7, 0 };
+            int colW7 = getWidth() / kTotalCols;
+            int col = pos.x / colW7;
+            if (col == 0) return { -5, 0 };
+            if (col == 1) return { -6, 0 };
+            if (col == 2) return { -7, 0 };
+            if (col == 3) return { -8, 0 };
+            return { -1, -1 }; // empty columns
         }
 
         int row = pos.y / kRowH - kFirstVoiceRow;
@@ -445,6 +501,7 @@ private:
     {
         if (hitId == -6) return mMainsNoiseKnob;
         if (hitId == -7) return mClockNoiseKnob;
+        if (hitId == -8) return mBbdDriveKnob;
         return mAnalogNoiseKnob; // -5
     }
 
@@ -457,6 +514,10 @@ private:
         mProcessor->mDSP.mMainsMul = knobToMul(mMainsNoiseKnob);
         mProcessor->mDSP.mChorus.mMainsMul = knobToMul(mMainsNoiseKnob);
         mProcessor->mDSP.mChorus.mClockMul = knobToMul(mClockNoiseKnob);
+        // BBD drive: userVal 0..100, k = 0.48 * (userVal/100)^2
+        float userVal = mBbdDriveKnob * 100.f;
+        mProcessor->mDSP.mChorus.mBbdDriveUser = userVal;
+        mProcessor->mDSP.mChorus.updateBbdDrive();
     }
 
     void dismiss()
@@ -471,10 +532,11 @@ private:
     float mAnalogNoiseKnob = 0.5f;  // 0..1, 0.5 = unity
     float mMainsNoiseKnob = 0.5f;
     float mClockNoiseKnob = 0.5f;
+    float mBbdDriveKnob = 0.5f;   // 0..1, 0.5 = default (50%)
     float mValues[kMaxVoices][kNumParams] = {};
     int mHoverRow = -1, mHoverCol = -1;
     int mSelectedRow = -1, mSelectedCol = -1;
     float mDragStartY = 0.f;
     float mDragStartValue = 0.f;
-    juce::Rectangle<int> mTunePoorlyRect, mTuneLazyRect, mTunePerfectRect;
+    juce::Rectangle<int> mTunePoorlyRect, mTuneLazyRect, mTunePerfectRect, mCloseRect;
 };

@@ -211,11 +211,18 @@ struct VCF
     return kNorm * (expf(kShape * res) - 1.f);
   }
 
-  // Juno-106: TODO — capture actual J106 filter resonance data and derive
-  // a proper curve. For now, use the J6 curve as a placeholder.
   static float ResK_J106(float res)
   {
-    return ResK_J6(res);
+    // Fitted to hardware peak amplitudes from noise grid measurements
+    // (SN#193284). Small-signal k(res) extracted by inverting the
+    // 4-pole TPT cascade peak response, scaled 1.24x to compensate
+    // for OTA compression underestimate in extraction. RMSE 0.07
+    // over res >= 28 (pre-scale). k(1.0) = 4.19, threshold ~ res 0.9.
+    float r = res;
+    float r2 = r * r;
+    float r3 = r2 * r;
+    float r4 = r2 * r2;
+    return 1.24f * (4.7116f * r - 6.5743f * r2 + 13.4633f * r3 - 8.2197f * r4);
   }
 
   // Frequency compensation: multiplier applied to g (integrator coeff)
@@ -266,13 +273,13 @@ struct VCF
   // 0-72 (R=0), clamped to 0.80 at high frequencies where the original
   // compensation was overshooting. At high resonance, blends toward 1.0
   // to preserve self-oscillation pitch accuracy.
+  // Non-optimized path: use the formula approximation.
+  // The optimized VCF uses a 2D lookup table instead.
   static float FreqCompensationClamped(float k, float frq)
   {
-    float lowQ = std::max(1.0f, 0.48f * powf(std::max(frq, 1e-6f), -0.12f));
-    // Mid-range boost: hardware IR3109 passband is wider than ideal at
-    // 1-4 kHz. Gaussian bump centered at frq=0.012 (F~75 at 96k/4x).
+    float lowQ = std::max(1.0f, 0.42f * powf(std::max(frq, 1e-6f), -0.12f));
     float logdist = logf(std::max(frq, 1e-6f) / 0.012f);
-    lowQ += 0.30f * expf(-logdist * logdist / 1.5f);
+    lowQ += 0.20f * expf(-logdist * logdist / 1.0f);
     float blend = std::min(k * k * 0.0625f, 1.f);
     return lowQ + blend * (1.f - lowQ);
   }
@@ -301,22 +308,25 @@ struct VCF
       float qComp = 0.379f + 0.087f * k;
       float freqGain = powf(std::max(frq, 1e-6f) * (1.f / 0.00445f), -0.10f);
       freqGain = std::clamp(freqGain, 0.65f, 1.2f);
-      // Blend freqGain toward 0.85 at high resonance (not 1.0 — hardware
-      // passband still drops slightly at high freq + high res).
-      float blend = std::min(k * k * 0.0625f, 1.f);
-      freqGain = freqGain + blend * (0.85f - freqGain);
       return qComp * freqGain;
   }
 
   static constexpr float kOTAScaleBase = 0.35f;
 
-  static float OTAScaleForFreq(float frq)
+  static float OTAScaleForFreq(float frq, float resByte = 0.f)
   {
     float scale = kOTAScaleBase;
     if (frq < 0.005f)
     {
       float blend = std::max(frq / 0.005f, 0.15f);
       scale *= blend;
+    }
+    // At high resonance, restore full OTA drive for accurate self-osc pitch
+    if (resByte > 0.f)
+    {
+      float resK = 1.024f * (expf(2.128f * resByte / 127.f) - 1.f);
+      float resBlend = std::min(resK * resK * 0.0625f, 1.f);
+      scale = scale + resBlend * (kOTAScaleBase - scale);
     }
     return scale;
   }
@@ -346,7 +356,9 @@ struct VCF
     // Always use frq/4 regardless of actual oversample setting so the
     // compensation curve is consistent across all modes.
     float k = mJ106Res ? ResK_J106(res) : ResK_J6(res);
-    k = SoftClipK(k);
+    if (!mJ106Res) k = SoftClipK(k);
+    if (frq > 0.5f)
+      k *= std::max(1.f - (frq - 0.5f) * 1.f, 0.5f);
     mFreqComp = FreqCompensationClamped(k, frq * 0.25f);
 
     if (mOversample == 4)
@@ -417,7 +429,9 @@ private:
 
     // Resonance CV: external transistor feeds BA662 OTA control current.
     float k = mJ106Res ? ResK_J106(res) : ResK_J6(res);
-    k = SoftClipK(k);
+    if (!mJ106Res) k = SoftClipK(k);
+    if (frq > 0.5f)
+      k *= std::max(1.f - (frq - 0.5f) * 1.f, 0.5f);
 
     // Clamp frq for the bilinear transform — prevents tan() from
     // blowing up near Nyquist.
@@ -437,33 +451,9 @@ private:
 
     float comp = InputComp(k, frq);
 
-    // Frequency-dependent feedback drive (matches optimized VCF)
-    float fbBoost = 1.f;
-    {
-      float frqRef = 0.01f;
-      if (frqUnclamped > frqRef)
-      {
-        fbBoost = powf(frqUnclamped / frqRef, 0.3f);
-        fbBoost = std::min(fbBoost, 4.f);
-      }
-    }
-
-    // BA662 feedback path: models the R3(100K)/R1(1.5K) voltage divider
-    // that attenuates the LP4 output before the BA662 differential pair.
-    // In the physical circuit the attenuation is 0.015 (67:1), placing
-    // the tanh argument at ~0.26 during self-oscillation — barely
-    // nonlinear (~2% compression). This gentle memoryless limiting
-    // stabilizes the limit cycle inherently, with flat amplitude across
-    // frequency and resonance. Harmonic purity (H3 ≈ -45 dB relative
-    // on hardware) falls out of the weak drive rather than requiring
-    // envelope-based amplitude control.
-    //
-    // In our normalized-amplitude model, kFbScale is larger than the
-    // physical 0.015 ratio because state variables are unity-scaled
-    // rather than in millivolts. The k-dependent scaling reduces
-    // effective drive at lower resonance (R=0.9 vs R=1.0), keeping
-    // the amplitude gap within ~1 dB across settings.
-    float kFbScale = 4.20f * std::clamp((k - 3.5f) * 0.8f, 0.3f, 1.f) * fbBoost;
+    // BA662 tanh saturation is set by 2*Vt, independent of IR3109 bias
+    // current -- amplitude is naturally flat.
+    float kFbScale = 4.20f * std::clamp((k - 2.5f) * 1.0f, 0.3f, 1.f);
     float fbSig = OTASat(S * kFbScale) / kFbScale;
 
     float u = (input * comp - k * fbSig) / (1.f + k * G);
@@ -471,14 +461,10 @@ private:
     float lp4;
     if (mOTASaturation)
     {
-      // Per-stage describing function pitch compensation.
-      // The IR3109 OTA stages (kOTAScale=0.35) have effective gain < 1
-      // at self-oscillation amplitude, pulling pitch flat. dfGain boosts
-      // g1 to compensate. Coefficient 0.5 and floor 0.65 tuned against
-      // Juno-6 SN#193284 self-oscillation pitch data. Achieves ±5 cents
-      // from 55–1760 Hz at R=1.0, ±3 cents at R=0.9.
+      // Describing function pitch compensation. Constant 0.6 gives
+      // +/-2 cents from 220 Hz up at R=1.0.
       float stateAmp = fabsf(mS[3]);
-      float dfGain = 1.f / sqrtf(1.f + 0.5f * stateAmp * stateAmp);
+      float dfGain = 1.f / sqrtf(1.f + 0.6f * stateAmp * stateAmp);
       dfGain = std::max(dfGain, 0.65f);
 
       // Fade correction off near Nyquist to prevent aliasing feedback.

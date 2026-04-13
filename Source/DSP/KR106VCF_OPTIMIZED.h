@@ -135,6 +135,7 @@ struct VCF
   float mCacheK = 0.f;
   float mCacheG = 0.f;
   float mCacheFreqGain = 1.f;
+  float mCacheResByte = 0.f;   // raw slider value 0-127 for table lookup
 
   // ----- per-Process() coefficients -----
   struct Coeffs
@@ -149,6 +150,7 @@ struct VCF
     float noiseLevel;    // adaptive thermal noise (control-rate)
     float outputScale;   // freq+res dependent output attenuation
     float otaScale;      // frequency-dependent OTA drive
+    float dfCoeff;       // describing function coefficient (freq-dependent)
   } mC;
 
   VCF()
@@ -230,10 +232,18 @@ struct VCF
     return kNorm * (expf(kShape * res) - 1.f);
   }
 
-  // Juno-106: TODO — capture J106 filter resonance data. Placeholder.
   static float ResK_J106(float res)
   {
-    return ResK_J6(res);
+    // Fitted to hardware peak amplitudes from noise grid measurements
+    // (SN#193284). Small-signal k(res) extracted by inverting the
+    // 4-pole TPT cascade peak response, scaled 1.24x to compensate
+    // for OTA compression underestimate in extraction. RMSE 0.07
+    // over res >= 28 (pre-scale). k(1.0) = 4.19, threshold ~ res 0.9.
+    float r = res;
+    float r2 = r * r;
+    float r3 = r2 * r;
+    float r4 = r2 * r2;
+    return 1.24f * (4.7116f * r - 6.5743f * r2 + 13.4633f * r3 - 8.2197f * r4);
   }
 
   // Hardware-calibrated frequency compensation. Boosts pole frequency
@@ -242,15 +252,72 @@ struct VCF
   // 0.48 * frq^-0.12 fitted to VCF bytes 0-72, clamped to 1.0 at high
   // frequencies. At high resonance, blends toward 1.0 to preserve
   // self-oscillation pitch accuracy.
-  static float FreqCompensationClamped(float k, float frq)
+  // Hardware-calibrated 2D frequency compensation lookup table.
+  // Measured from uncorrected DSP vs hardware -3dB points across
+  // two grids: 10x10 (full range, R=0..127) and 15x5 (preset zone, R=0..32).
+  // Bilinear interpolation on (freq_byte, res_byte) axes at runtime.
+  // Each entry is the pole frequency multiplier needed to match hardware.
+  static constexpr int kFCFreqN = 20;
+  static constexpr int kFCResN = 10;
+  static constexpr float kFCFreq[20] = {0.f,14.f,28.f,32.f,36.f,40.f,44.f,48.f,52.f,56.f,60.f,64.f,68.f,72.f,76.f,80.f,84.f,98.f,112.f,127.f};
+  static constexpr float kFCRes[10] = {0.f,14.f,28.f,42.f,56.f,70.f,84.f,98.f,112.f,127.f};
+  static constexpr float kFCTable[10][20] = {
+    {0.99f, 1.12f, 0.95f, 0.97f, 0.92f, 0.94f, 0.95f, 0.93f, 0.92f, 0.93f, 0.95f, 0.93f, 0.92f, 0.90f, 0.98f, 0.94f, 0.95f, 0.92f, 0.96f, 1.00f},  // R=0
+    {1.00f, 1.08f, 0.99f, 0.98f, 0.98f, 0.97f, 0.97f, 0.99f, 1.01f, 1.03f, 1.08f, 1.14f, 1.18f, 1.22f, 1.25f, 1.25f, 1.25f, 1.10f, 1.00f, 1.00f},  // R=14
+    {1.05f, 1.21f, 0.99f, 1.01f, 1.02f, 1.04f, 1.05f, 1.07f, 1.08f, 1.09f, 1.14f, 1.19f, 1.22f, 1.25f, 1.25f, 1.25f, 1.25f, 1.10f, 1.02f, 1.00f},  // R=28
+    {1.06f, 1.06f, 1.13f, 1.09f, 1.05f, 1.00f, 1.01f, 1.07f, 1.13f, 1.19f, 1.21f, 1.24f, 1.26f, 1.25f, 1.21f, 1.17f, 1.13f, 1.09f, 1.06f, 1.00f},  // R=42
+    {0.91f, 0.95f, 1.07f, 1.05f, 1.04f, 1.02f, 1.02f, 1.04f, 1.05f, 1.07f, 1.10f, 1.12f, 1.15f, 1.16f, 1.16f, 1.16f, 1.16f, 1.08f, 1.00f, 1.00f},  // R=56
+    {1.01f, 1.05f, 1.09f, 1.06f, 1.03f, 1.01f, 1.01f, 1.04f, 1.07f, 1.10f, 1.09f, 1.09f, 1.09f, 1.08f, 1.08f, 1.07f, 1.06f, 1.02f, 0.98f, 1.00f},  // R=70
+    {0.97f, 1.07f, 1.03f, 1.01f, 0.99f, 0.96f, 0.97f, 0.99f, 1.02f, 1.04f, 1.07f, 1.11f, 1.14f, 1.14f, 1.10f, 1.07f, 1.03f, 1.01f, 0.98f, 1.00f},  // R=84
+    {1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},  // R=98  (resonance peak dominates; blend -> 1.0)
+    {1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},  // R=112 (resonance peak dominates; blend -> 1.0)
+    {1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},  // R=127 (resonance peak dominates; blend -> 1.0)
+  };
+
+  // Convert normalized frequency (frq = hz / Nyquist) to equivalent VCF byte
+  // for table lookup. Inverse of dacToHz: byte = ln(hz / 5.53) * 1143 / (0.693 * 128)
+  static float frqToByte(float frq, float sampleRate)
   {
-    float lowQ = std::max(1.0f, 0.48f * powf(std::max(frq, 1e-6f), -0.12f));
-    // Mid-range boost: hardware IR3109 passband is wider than ideal at
-    // 1-4 kHz. Gaussian bump centered at frq=0.012 (F~75 at 96k/4x).
-    float logdist = logf(std::max(frq, 1e-6f) / 0.012f);
-    lowQ += 0.30f * expf(-logdist * logdist / 1.5f);
+    float hz = frq * sampleRate * 0.5f;
+    if (hz <= 5.53f) return 0.f;
+    float dac = logf(hz / 5.53f) / (0.693147f / 1143.f);
+    return std::clamp(dac / 128.f, 0.f, 127.f);
+  }
+
+  static float FreqCompensationClamped(float k, float frq, float resByte, float sampleRate)
+  {
+    // Convert runtime frq to equivalent freq byte for table lookup
+    // frq is at the 4x-oversampled rate, so scale back to base rate
+    float freqByte = frqToByte(frq * 4.f, sampleRate);
+
+    // Bilinear interpolation on the 2D lookup table
+    int fi = 0;
+    for (int i = 0; i < kFCFreqN - 1; i++)
+      if (kFCFreq[i + 1] <= freqByte) fi = i + 1;
+    int fi1 = std::min(fi + 1, kFCFreqN - 1);
+    float ff = (fi == fi1) ? 0.f : (freqByte - kFCFreq[fi]) / (kFCFreq[fi1] - kFCFreq[fi]);
+    ff = std::clamp(ff, 0.f, 1.f);
+
+    int ri = 0;
+    for (int i = 0; i < kFCResN - 1; i++)
+      if (kFCRes[i + 1] <= resByte) ri = i + 1;
+    int ri1 = std::min(ri + 1, kFCResN - 1);
+    float fr = (ri == ri1) ? 0.f : (resByte - kFCRes[ri]) / (kFCRes[ri1] - kFCRes[ri]);
+    fr = std::clamp(fr, 0.f, 1.f);
+
+    float v00 = kFCTable[ri][fi],  v10 = kFCTable[ri][fi1];
+    float v01 = kFCTable[ri1][fi], v11 = kFCTable[ri1][fi1];
+    float top = v00 + (v10 - v00) * ff;
+    float bot = v01 + (v11 - v01) * ff;
+    float tableVal = top + (bot - top) * fr;
+
+    // At high resonance, the table data is unreliable because the
+    // resonance peak distorts the -3dB measurement. Blend toward 1.0
+    // as resonance increases -- the resonance peak dominates the response
+    // and the cascade droop correction is less relevant.
+    // k reaches ~4 at res byte ~80; blend reaches 1.0 there.
     float blend = std::min(k * k * 0.0625f, 1.f);
-    return lowQ + blend * (1.f - lowQ);
+    return tableVal + blend * (1.f - tableVal);
   }
 
   // Soft-clip resonance above k=3.0 (OTA gain compression at high feedback).
@@ -273,11 +340,7 @@ struct VCF
   // freqGain should be pre-computed and cached (contains powf).
   static float InputComp(float k, float freqGain)
   {
-    // Blend freqGain toward 0.85 at high resonance (not 1.0 — hardware
-    // passband still drops slightly at high freq + high res).
-    float blend = std::min(k * k * 0.0625f, 1.f);
-    float fg = freqGain + blend * (0.85f - freqGain);
-    return (0.379f + 0.087f * k) * fg;
+    return (0.379f + 0.087f * k) * freqGain;
   }
 
   static float FreqGain(float frq)
@@ -293,7 +356,7 @@ struct VCF
   // Measured: HW slope is ~12 dB/oct at F=14 vs ideal 24 dB/oct.
   // Crossover at frq ~0.005 (240 Hz at 96k). Below that, OTA drive
   // ramps down, making tanh more linear.
-  static float OTAScaleForFreq(float frq)
+  static float OTAScaleForFreq(float frq, float resByte)
   {
     float scale = kOTAScaleBase;
     if (frq < 0.005f)
@@ -301,7 +364,11 @@ struct VCF
       float blend = std::max(frq / 0.005f, 0.15f);
       scale *= blend;
     }
-    return scale;
+    // At high resonance, restore full OTA drive so self-oscillation
+    // pitch stays accurate. The slope correction only matters at low Q.
+    float resK = (resByte > 0.f) ? 1.024f * (expf(2.128f * resByte / 127.f) - 1.f) : 0.f;
+    float resBlend = std::min(resK * resK * 0.0625f, 1.f);
+    return scale + resBlend * (kOTAScaleBase - scale);
   }
 
   // Nonlinear one-pole OTA-C stage: solves y = s + g*tanh(x - y)
@@ -337,7 +404,18 @@ struct VCF
       mCacheJ106 = mJ106Res;
 
       float k = mJ106Res ? ResK_J106(res) : ResK_J6(res);
-      k = SoftClipK(k);
+      if (!mJ106Res) k = SoftClipK(k); // J106 quartic already saturates
+
+      // Tame resonance at ultrasonic cutoff. The peak itself is inaudible
+      // but its skirt extends into the audible range and sounds harsh.
+      // Hardware bandwidth (~50 kHz) naturally limits this. Fade k to
+      // half above 24 kHz (frq 0.5 at 96k), reaching 50% at 48 kHz.
+      if (frq > 0.5f)
+      {
+        float fade = std::max(1.f - (frq - 0.5f) * 1.f, 0.5f);
+        k *= fade;
+      }
+
       mCacheK = k;
 
       // ProcessSample used to clamp the already-divided frq to 0.85
@@ -347,9 +425,8 @@ struct VCF
                       : 1.f;
       float frqOver = std::min(frq * overScale, 0.85f);
 
-      // FreqComp is always computed at the 4x-equivalent rate so the
-      // tuning curve is consistent across oversample modes.
-      float fc = FreqCompensationClamped(k, frq * 0.25f);
+      // FreqComp from 2D hardware-calibrated lookup table.
+      float fc = FreqCompensationClamped(k, frq * 0.25f, mCacheResByte, mSampleRate);
       mCacheG = tanf(frqOver * static_cast<float>(M_PI) * 0.5f) * fc;
       mCacheFreqGain = FreqGain(frq);
     }
@@ -362,24 +439,6 @@ struct VCF
     const float g1_3 = g1_2 * g1;
     const float G    = g1_2 * g1_2;
 
-    // Frequency-dependent self-oscillation amplitude limit.
-    // On hardware, IR3109 OTA gain compression increases at higher bias
-    // currents (higher cutoff), limiting resonance peak amplitude.
-    // We model this by scaling kFbScale up at high frequency, which drives
-    // the feedback tanh harder and stabilizes the limit cycle at a lower
-    // amplitude -- without changing k (preserving peak shape/Q).
-    float fbBoost = 1.f;
-    {
-      float frqRef = 0.01f; // ~500 Hz at 96k
-      if (mCacheFrq > frqRef)
-      {
-        // Power law: boost = (frq/frqRef)^0.3
-        // At 1kHz: 1.23, at 4kHz: 1.62, at 10kHz: 2.0, at 33kHz: 2.7
-        fbBoost = powf(mCacheFrq / frqRef, 0.3f);
-        fbBoost = std::min(fbBoost, 4.f); // cap
-      }
-    }
-
     mC.k    = k;
     mC.g    = g;
     mC.g1   = g1;
@@ -388,15 +447,24 @@ struct VCF
     mC.G    = G;
     mC.invDen      = 1.f / (1.f + k * G);
     mC.comp        = InputComp(k, mCacheFreqGain);
-    mC.otaScale    = OTAScaleForFreq(mCacheFrq);
-    mC.kFbScale    = 4.20f * std::clamp((k - 3.5f) * 0.8f, 0.3f, 1.f) * fbBoost;
+    mC.otaScale    = OTAScaleForFreq(mCacheFrq, mCacheResByte);
+
+    // Describing function pitch compensation coefficient. Constant 0.6
+    // gives +/-2 cents from 220 Hz up; freq ramp was vestigial and went
+    // sharp at HF (+5.6 cents at 7 kHz).
+    mC.dfCoeff     = 0.6f;
+    // BA662 tanh saturation is set by 2*Vt, independent of IR3109 bias
+    // current -- amplitude is naturally flat.
+    mC.kFbScale    = 4.20f * std::clamp((k - 2.5f) * 1.0f, 0.3f, 1.f);
     mC.invKFbScale = 1.f / mC.kFbScale;
 
-    // Output attenuation at high freq + high res: models the IR3109's
-    // reduced output swing at high bias currents under heavy feedback.
-    // Only active when both cutoff and resonance are high.
+    // Output scaling disabled -- self-osc level is now controlled by
+    // fbBoost alone. OutputScale was attenuating the passband at high
+    // freq+res which caused KBD-tracking patches to lose level at high notes.
+    mC.outputScale = 1.f;
+    if (false) // DISABLED
     {
-      float frqFactor = std::clamp((mCacheFrq - 0.02f) * 20.f, 0.f, 1.f); // ramps 0->1 from 1kHz to ~3kHz
+      float frqFactor = std::clamp((mCacheFrq - 0.02f) * 20.f, 0.f, 1.f);
       float resFactor = std::clamp((k - 2.f) * 0.5f, 0.f, 1.f);           // ramps 0->1 from k=2 to k=4
       float atten = frqFactor * resFactor * 0.5f;                           // max 0.5 = -6 dB
       mC.outputScale = 1.f - atten;
@@ -494,7 +562,7 @@ private:
     // g1 to compensate. Tuned against Juno-6 SN#193284 self-oscillation
     // pitch data: ±5 cents from 55–1760 Hz at R=1.0, ±3 cents at R=0.9.
     float stateAmp = fabsf(mS[3]);
-    float dfGain = 1.f / sqrtf(1.f + 0.5f * stateAmp * stateAmp);
+    float dfGain = 1.f / sqrtf(1.f + mC.dfCoeff * stateAmp * stateAmp);
     dfGain = std::max(dfGain, 0.65f);
     // hfFade prevents aliasing feedback near Nyquist.
     dfGain = 1.f - mC.hfFade * (1.f - dfGain);

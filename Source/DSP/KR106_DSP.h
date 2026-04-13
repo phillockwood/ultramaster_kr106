@@ -44,7 +44,7 @@ namespace kr106 {
 // Frequencies from circuit analysis + ngspice simulation (see KR106_HPF.h).
 struct HPF
 {
-  static constexpr float kDCBlockHz = 10.f;
+  static constexpr float kDCBlockHz = 4.f;
   static constexpr int kXfadeSamples = 64; // ~1.5 ms at 44.1k
   // J6 PCHIP curve sampled at 4 switch positions (0/3, 1/3, 2/3, 3/3)
   static constexpr float kJ6Freqs[4] = { 38.6f, 260.f, 530.f, 1394.f };
@@ -503,7 +503,10 @@ public:
 
     // VCA level before chorus (matches hardware: VCA IC5 → Chorus BBD)
     for (int s = 0; s < nFrames; s++)
-      outputs[0][s] *= static_cast<T>(mVcaLevel);
+    {
+      mVcaLevelSmooth += (mVcaLevel - mVcaLevelSmooth) * 0.001f;
+      outputs[0][s] *= static_cast<T>(mVcaLevelSmooth);
+    }
 
     // Always call Chorus::Process — even when bypassed it keeps the
     // delay lines, filter state, and LFO warm for click-free engagement.
@@ -517,10 +520,12 @@ public:
     }
 
     // Master volume after chorus (scales signal + chorus noise together)
+    // Smoothed per-sample to prevent zipper noise on knob changes.
     for (int s = 0; s < nFrames; s++)
     {
-      outputs[0][s] *= static_cast<T>(mMasterVol);
-      if (nOutputs > 1) outputs[1][s] *= static_cast<T>(mMasterVol);
+      mMasterVolSmooth += (mMasterVol - mMasterVolSmooth) * 0.001f;
+      outputs[0][s] *= static_cast<T>(mMasterVolSmooth);
+      if (nOutputs > 1) outputs[1][s] *= static_cast<T>(mMasterVolSmooth);
     }
   }
 
@@ -619,7 +624,9 @@ public:
   kr106::Arpeggiator mArp;
 
   float mVcaLevel = 1.f;
+  float mVcaLevelSmooth = 1.f;
   float mMasterVol = 1.f;
+  float mMasterVolSmooth = 1.f;
   float mSampleRate = 44100.f;
   int mOctaveTranspose = 0;
   double mTuning = 0.;

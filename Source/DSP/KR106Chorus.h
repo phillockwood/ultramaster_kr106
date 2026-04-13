@@ -158,12 +158,12 @@ struct BBDLine {
   BBDFilter mPreFilter;
   BBDFilter mPostFilter;
 
-  // calibrated for DSP signal levels (matches hardware -0.88 dB 
-  // compression between 1 voice and 6 voice saw+pulse+sub+noise)
-  static constexpr float kBBDSatDrive = 0.065f;  
+  // Default BBD saturation drive (user-adjustable via variance sheet)
+  static constexpr float kBBDSatDriveDefault = 0.12f;
+  float mSatDrive = kBBDSatDriveDefault;
+  float mSatDriveSmooth = kBBDSatDriveDefault;
 
   float mSampleRate = 44100.f;
-
 
   void Init(float sampleRate)
   {
@@ -221,14 +221,19 @@ struct BBDLine {
     // 1. Pre-filter (matched anti-aliasing stage, Tr13/Tr14 model)
    float filtered = mPreFilter.Process(input);
 
-   // BBD saturates its input? Still not sure if this actually happens in a real juno
-   // peoiple talk about it, can't replicate it with unison 6 voices on my Juno 6
-   // so not implemented for now
-   // float sat = tanhf(filtered * kBBDSatDrive) / kBBDSatDrive;
-
+   // BBD input saturation — soft-knee tanh modeling the MN3009's signal
+   // headroom. Juno service manual documents a 10Vpp clipping threshold
+   // at TP2 (section 11, Chorus Bias), but the effect is subtle in normal
+   // playing — we couldn't cleanly measure it on J6 even with
+   // 6 unison voices + sub + pulse + noise. Default k ≈ 0.12 puts the
+   // knee where only the hottest factory patches reach it; exposed as
+   // user Drive parameter for those who want more character.
+   mSatDriveSmooth += (mSatDrive - mSatDriveSmooth) * 0.001f;
+   float sd = mSatDriveSmooth;
+   float sat = (sd > 0.01f) ? tanhf(filtered * sd) / sd : filtered;
 
    // 2. Write to delay buffer
-   mBuf[mWPos & mMask] = filtered;
+   mBuf[mWPos & mMask] = sat;
 
    // 3. Read with Hermite interpolation at fractional position
    float wet = ReadHermite(delaySamples);
@@ -347,6 +352,15 @@ static constexpr float kCenterDelayMs = 3.30f;   // was 3.20f
   float mAnalogMul = 1.f; // broadband noise multiplier (variance sheet)
   float mMainsMul = 1.f;  // mains ripple multiplier (variance sheet)
   float mClockMul = 1.f;  // BBD clock bleed multiplier (variance sheet)
+  float mBbdDriveUser = 50.f; // user-adjustable BBD sat drive (0-100, default 50)
+
+  void updateBbdDrive()
+  {
+    float norm = mBbdDriveUser / 100.f;
+    float drive = 0.48f * norm * norm;
+    mLine0.mSatDrive = drive;
+    mLine1.mSatDrive = drive;
+  }
 
   void Init(float sampleRate)
   {
