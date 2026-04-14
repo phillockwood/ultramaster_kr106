@@ -244,26 +244,36 @@ KR106Editor::KR106Editor(KR106AudioProcessor& p)
     // peer that breaks mouse events in AU hosts on macOS Tahoe.
     // Use toFront() after addAndMakeVisible instead.
 
-    // Enable host drag-resize. Lock aspect ratio so the UI scales uniformly.
+    // === SCALE & RESIZE SETUP ===
+    // Order matters: we MUST set the correct initial size BEFORE calling
+    // setResizable(), because setResizable() can trigger an early resized()
+    // that derives scale from the editor's current width. If the width is
+    // still the default 940 at that point, mUIScale gets clobbered to 1.0.
+    //
+    // Also: in Logic AU, the host queries the editor's size synchronously
+    // right after construction (via JUCE's EditorCompHolder::getSizeToContainChild).
+    // The AU wrapper has no parentSizeChanged → editor path, so any later
+    // setSize calls won't propagate. The size we set here is what Logic uses
+    // for the lifetime of the window.
+    float savedScale = mProcessor.mUIScale > 0.f ? mProcessor.mUIScale : mUIScale;
+    mUIScale = savedScale;
+
+    mInternalResize = true;
+    setSize(juce::roundToInt(kBaseWidth * savedScale),
+            juce::roundToInt(kBaseHeight * savedScale));
+    mInternalResize = false;
+
+    // Now enable host drag-resize. Lock aspect ratio so the UI scales uniformly.
     // Host provides resize handles for VST3/AU/LV2/CLAP/standalone.
+    // Note: Logic AU drag-resize doesn't actually work due to a JUCE wrapper
+    // limitation (parentSizeChanged → resizeHostWindow forces host back to
+    // editor's bounds instead of forwarding new size). Users must use the
+    // in-plugin Settings menu to change scale. This is the same limitation
+    // Surge XT and other JUCE-based plugins have in Logic.
     setResizable(true, false);
     setResizeLimits(kBaseWidth, kBaseHeight, kBaseWidth * 4, kBaseHeight * 4);
     getConstrainer()->setFixedAspectRatio(
         static_cast<double>(kBaseWidth) / kBaseHeight);
-
-    // Apply saved scale: set transform only (no setSize). The host will
-    // restore its own window size from project state. If the host gets it
-    // wrong (standalone, or host that doesn't save editor size), correct
-    // asynchronously after the host's initialization completes.
-    // Read the processor's authoritative scale (survives the resized() call
-    // that fires during setResizable/setResizeLimits above).
-    float savedScale = mProcessor.mUIScale > 0.f ? mProcessor.mUIScale : mUIScale;
-    applyScale(savedScale, false);
-    juce::MessageManager::callAsync([this, savedScale] {
-        float currentScale = static_cast<float>(getWidth()) / kBaseWidth;
-        if (std::abs(currentScale - savedScale) > 0.01f)
-            applyScale(savedScale);
-    });
 
     startTimerHz(30);
 }
