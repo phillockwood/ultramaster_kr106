@@ -31,10 +31,19 @@ class KR106Audio {
 
     // Try AudioWorklet first
     try {
-      await this.ctx.audioWorklet.addModule('kr106-processor.js');
+      await this.ctx.audioWorklet.addModule('dist/kr106-processor.js');
       this.node = new AudioWorkletNode(this.ctx, 'kr106-processor', {
         outputChannelCount: [2]
       });
+
+      // Fetch both WASM glue JS and binary on main thread
+      // (worklet has no fetch/importScripts)
+      const [glueResp, wasmResp] = await Promise.all([
+        fetch('dist/kr106_dsp.js'),
+        fetch('dist/kr106_dsp.wasm')
+      ]);
+      const wasmText = await glueResp.text();
+      const wasmBinary = await wasmResp.arrayBuffer();
 
       // Wait for WASM to initialize inside the worklet
       await new Promise((resolve, reject) => {
@@ -44,20 +53,37 @@ class KR106Audio {
           else if (e.data.type === 'presetName') {
             this._presetNames[e.data.index] = e.data.name;
           }
+          else if (e.data.type === 'presetValues') {
+            if (this.onPresetValues) this.onPresetValues(e.data);
+          }
+          else if (e.data.type === 'sliderUpdate') {
+            if (this.onSliderUpdate) this.onSliderUpdate(e.data);
+          }
           else if (e.data.type === 'scope') {
             this._scopeData = e.data;
           }
         };
-        // Tell the worklet to load WASM (relative URL for the glue JS)
-        this.node.port.postMessage({ type: 'init', wasmUrl: 'dist/kr106_dsp.js' });
+        this.node.port.postMessage({ type: 'init', wasmText, wasmBinary }, [wasmBinary]);
       });
 
       this.node.connect(this.ctx.destination);
       this._useWorklet = true;
       this.ready = true;
 
-      // Pre-fetch preset names (worklet has them, main thread needs them for UI)
-      this._fetchPresetNames();
+      // Load a second WASM instance on the main thread for stateless queries
+      // (tooltip Hz/ms/dB conversions). No kr106_create -- just the pure functions.
+      const script = document.createElement('script');
+      script.src = 'dist/kr106_dsp.js';
+      await new Promise((res, rej) => { script.onload = res; script.onerror = rej; document.head.appendChild(script); });
+      this.mod = await createKR106();
+
+      // Batch-fetch all preset names from the calculator module
+      this._presetNames = {};
+      const numPresets = this.mod._kr106_get_num_presets();
+      for (let i = 0; i < numPresets; i++) {
+        const ptr = this.mod._kr106_get_preset_name(i);
+        this._presetNames[i] = this.mod.UTF8ToString(ptr);
+      }
 
       console.log('KR-106 ready (AudioWorklet): ' + sr + ' Hz');
       return;
@@ -101,6 +127,14 @@ class KR106Audio {
     this.node.connect(this.ctx.destination);
     this._useWorklet = false;
     this.ready = true;
+
+    // Cache preset names
+    const numPresets = this.mod._kr106_get_num_presets();
+    for (let i = 0; i < numPresets; i++) {
+      const ptr = this.mod._kr106_get_preset_name(i);
+      this._presetNames[i] = this.mod.UTF8ToString(ptr);
+    }
+
     console.log('KR-106 ready (ScriptProcessor): ' + sr + ' Hz');
   }
 
@@ -168,29 +202,30 @@ class KR106Audio {
 
   setBankOffset(offset) {
     if (this._useWorklet) {
-      this.node.port.postMessage({ type: 'param', index: -1, value: offset }); // handled specially
-    } else if (this.mod && this.mod._kr106_set_bank_offset) {
+      this.node.port.postMessage({ type: 'bankOffset', value: offset });
+    }
+    // Also update main-thread module so getPresetName returns correct bank
+    if (this.mod && this.mod._kr106_set_bank_offset) {
       this.mod._kr106_set_bank_offset(offset);
     }
+    this._presetNames = {}; // invalidate cache
   }
 
   getPresetName(index) {
-    if (this._useWorklet) {
-      return this._presetNames[index] || '';
-    }
+    if (this._presetNames[index]) return this._presetNames[index];
     if (!this.mod) return '';
     const ptr = this.mod._kr106_get_preset_name(index);
-    return this.mod.UTF8ToString(ptr);
+    const name = this.mod.UTF8ToString(ptr);
+    this._presetNames[index] = name;
+    return name;
   }
 
   getNumPresets() {
-    if (this._useWorklet) return 256;
     if (!this.mod) return 0;
     return this.mod._kr106_get_num_presets();
   }
 
   getPresetValue(presetIdx, paramIdx) {
-    if (this._useWorklet) return 0; // not available from worklet
     if (!this.mod) return 0;
     return this.mod._kr106_get_preset_value(presetIdx, paramIdx);
   }
