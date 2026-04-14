@@ -21,6 +21,16 @@ static void dbgLog(const juce::String& msg)
 static void dbgLog(const juce::String&) {}
 #endif
 
+// Diagnostic logging — always enabled, writes to diag.log next to settings.json.
+// Intended for temporary use debugging release builds. Remove when done.
+static void diagLog(const juce::String& msg)
+{
+  static bool first = true;
+  auto f = KR106PresetManager::getAppDataDir().getChildFile("diag.log");
+  if (first) { f.replaceWithText(""); first = false; } // clear on launch
+  f.appendText(juce::Time::getCurrentTime().toString(true, true, true, true) + "  " + msg + "\n");
+}
+
 #define KR106_DEBUG_TRANSPORT 0
 #if KR106_DEBUG_TRANSPORT
 static void dbgTransport(const juce::String& msg)
@@ -482,6 +492,13 @@ void KR106AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
   mDSP.mMasterVolSmooth = mDSP.mMasterVol;
   mDSP.mVcaLevelSmooth = mDSP.mVcaLevel;
 
+  diagLog("prepareToPlay: sr=" + juce::String(sampleRate) + " bs=" + juce::String(samplesPerBlock)
+        + " masterVol=" + juce::String(mDSP.mMasterVol, 4)
+        + " vcaLevel=" + juce::String(mDSP.mVcaLevel, 4)
+        + " analogBW.g=" + juce::String(mDSP.mAnalogBW.g, 6)
+        + " power=" + juce::String(mPowerOn ? 1 : 0)
+        + " nOutputs=" + juce::String(getTotalNumOutputChannels()));
+
   // Log voice allocation after Reset
   juce::String voicesAfter;
   for (int i = 0; i < mDSP.mActiveVoices; i++)
@@ -539,7 +556,16 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
   juce::ScopedNoDenormals noDenormals;
 
   static bool firstBlock = true;
-  if (firstBlock) { dbgLog("processBlock FIRST CALL"); firstBlock = false; }
+  if (firstBlock) {
+    dbgLog("processBlock FIRST CALL");
+    diagLog("processBlock FIRST: nFrames=" + juce::String(nFrames)
+          + " nOutputs=" + juce::String(nOutputs)
+          + " power=" + juce::String(mPowerOn ? 1 : 0)
+          + " masterVol=" + juce::String(mDSP.mMasterVol, 4)
+          + " analogBW.g=" + juce::String(mDSP.mAnalogBW.g, 6)
+          + " fadeIn=" + juce::String(mFadeInRemaining));
+    firstBlock = false;
+  }
 
   int nFrames = buffer.getNumSamples();
   int nOutputs = std::min(getTotalNumOutputChannels(), 2);
@@ -745,6 +771,7 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
       {
         mDSP.NoteOn(msg.getNoteNumber(), msg.getVelocity());
         mKeyboardHeld.set(msg.getNoteNumber());
+        diagNoteOnCount = 1; // trigger post-process peak logging
       }
     }
     else if (msg.isNoteOff())
@@ -893,6 +920,8 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
            + " arp=" + juce::String(mDSP.mArp.mEnabled ? 1 : 0) + " arpNotes=" + juce::String((int)mDSP.mArp.mHeldNotes.size()));
       mDSP.NoteOn(evt.data1, evt.data2);
       mKeyboardHeld.set(evt.data1);
+      diagNoteOnCount = 1; // trigger post-process peak logging
+      diagLog("UI NoteOn note=" + juce::String(evt.data1) + " vel=" + juce::String(evt.data2));
     }
     else if ((evt.status & 0xF0) == 0x80 || ((evt.status & 0xF0) == 0x90 && evt.data2 == 0))
     {
@@ -998,6 +1027,23 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         ch[i] *= static_cast<float>(mFadeInTotal - mFadeInRemaining + i) / mFadeInTotal;
     }
     mFadeInRemaining -= fadeLen;
+  }
+
+  // --- Diagnostic: log first NoteOn output ---
+  static int diagNoteOnCount = 0;
+  if (diagNoteOnCount > 0 && diagNoteOnCount <= 3)
+  {
+    float peak = 0.f;
+    for (int c = 0; c < nOutputs; c++)
+    {
+      const float* ch = buffer.getReadPointer(c);
+      for (int i = 0; i < nFrames; i++)
+        peak = std::max(peak, std::abs(ch[i]));
+    }
+    diagLog("postProcess[" + juce::String(diagNoteOnCount) + "]: peak=" + juce::String(peak, 6)
+          + " fadeIn=" + juce::String(mFadeInRemaining)
+          + " power=" + juce::String(mPowerOn ? 1 : 0));
+    diagNoteOnCount++;
   }
 
   // --- Mute if power off ---
