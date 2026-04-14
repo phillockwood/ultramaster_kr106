@@ -42,7 +42,7 @@ let adsrBoundAD=0, adsrBoundDS=0, adsrBoundSR=0, adsrSustainY=0.5;
 
 function updateScopeData(){
 if(!synth.ready)return;
-const sd=synth.getScopeData();if(!sd)return;
+const sd=synth.getScopeData();if(!sd){scopeHasData=false;scopeDisplayLen=0;return;}
 
 // Two formats: worklet sends {ringL, ringR, sync, writePos}
 //              ScriptProcessor sends {heap, ringOff, ringROff, syncOff, writePos}
@@ -75,6 +75,11 @@ scopeSamplesAvail=len;
 
 // Signal consumed (ScriptProcessor double-buffer only)
 if(!sd.ringL&&synth.mod&&synth.mod._kr106_scope_consumed)synth.mod._kr106_scope_consumed();
+
+// Update clip LED from peak (works in all scope modes).
+// Plugin uses instantaneous peak with no hold (reset every 33ms timer tick).
+// WASM scope runs at ~15 Hz so we hold for 1 frame to match visibility.
+if(peak>=1.0)scopeClipHold=1;
 
 if(peak<1e-6){scopeHasData=false;scopeDisplayLen=0;return}
 
@@ -113,7 +118,7 @@ function scopeCrosshairs(sx,sy,w,h){
 
 function scopePeakReadout(sx,sy,w,h,peakL){
   const peakDb=peakL>1e-10?20*Math.log10(peakL):-200;
-  if(peakDb>=0)scopeClipHold=30;else if(scopeClipHold>0)scopeClipHold--;
+  if(peakDb>=0)scopeClipHold=1;
   ctx.fillStyle=scopeClipHold>0?'#00ff00':'#008000';
   ctx.font=(10/S)+'px monospace';
   ctx.textAlign='right';
@@ -154,7 +159,7 @@ function drawScopeWaveform(ch){
   ctx.strokeStyle='#00ff00';ctx.lineWidth=1.5;ctx.stroke();
 
   scopeNavPeakDb=peakL>1e-10?20*Math.log10(peakL):-200;
-  if(scopeNavPeakDb>=0)scopeClipHold=30;else if(scopeClipHold>0)scopeClipHold--;
+  if(scopeNavPeakDb>=0)scopeClipHold=1;
 }
 
 // ===== Mode 1: Spectrum (FFT) =====
@@ -635,7 +640,7 @@ let aboutFrame=0;
 
 function buildAboutPixels(w,h){
   // Rasterize text into pixel array
-  const lines=['ULTRAMASTER','KR-106','2.5.6']; // UPDATE version here on release
+  const lines=['ULTRAMASTER','KR-106','2.5.6','BUILD 04-14 12:06']; // version and build date updated by Makefile
   const pixels=[];
   const lineH=10; // 7px glyph + 3px gap
   const totalH=lines.length*lineH;
