@@ -1,37 +1,25 @@
-// filter_test3 -- unified VCF test: generate MIDI, render through DSP, analyze WAV.
+// filter_test3 -- VCF passband gain and frequency compensation test.
 //
-// Captures the VCF frequency response at all 128 slider positions and
-// two resonance levels. One program generates the test, renders it
-// internally, or analyzes a hardware recording -- same grid definition
-// throughout, no pattern recognition needed.
+// Sweeps white noise through the VCF at 16 cutoff positions and 6
+// resonance levels.  Measures passband gain, -3/-6/-12/-24 dB points,
+// rolloff slope, and resonance peak prominence at each grid point.
 //
 // PATCH SETUP (matches ROM calibration, no oscillators):
-//   VCA=gate, pulse/saw/sub=off, noise=off (except noise sections),
+//   VCA=gate, pulse/saw/sub=off, noise=max,
 //   VCF env/lfo/kbd=0, chorus=off, HPF=flat, sustain=max, note=C4.
 //
-// TEST SEQUENCE (all blocks contiguous, no gaps):
+// TEST SEQUENCE:
 //
-//   Preamble (6s calibration):
+//   Preamble (2s):
 //     [0]  2s  Noise, filter wide open (byte 127), R=0
 //              -> recording level calibration + noise spectrum baseline
-//     [1]  2s  Saw wave, filter wide open (byte 127), R=0
-//              -> harmonic rolloff reference through fully open filter
-//     [2]  2s  Self-oscillation at byte 64, R=max
-//              -> pitch reference for tuner calibration
 //
-//   Section 1 -- Self-oscillation sweep (128s):
-//     128 x 1s blocks, R=max (127), VCF freq bytes 0-127
-//     -> maps VCF slider position to self-oscillation frequency in Hz
+//   10x10 grid -- Noise sweeps (10 res x 10 freq = 200s):
+//     Res bytes:  0, 14, 28, 42, 56, 70, 84, 98, 112, 127
+//     Freq bytes: 0, 14, 28, 42, 56, 70, 84, 98, 112, 127
+//     Each: 2s block -> passband gain, freq compensation, slope
 //
-//   Section 2 -- Noise sweep, R=0 (32s):
-//     16 x 2s blocks, R=0, VCF freq bytes 0,8,16,...120
-//     -> passband shape, -3/-6/-12/-24 dB points, rolloff slope
-//
-//   Section 3 -- Noise sweep, R=50 (32s):
-//     16 x 2s blocks, R=50 (0.39), same VCF positions
-//     -> slope vs resonance comparison
-//
-//   Total: 198s (3m18s)
+//   Total: ~203s (3m23s)
 //
 // USAGE:
 //   filter_test3 gen output.mid         Generate SysEx MIDI for hardware recording
@@ -53,46 +41,31 @@
 
 static constexpr int kNote = 60; // C4
 
-// Preamble: 3 x 2s calibration blocks
-static constexpr int kPreambleCount = 3;
+// Preamble: 1 x 2s calibration block
+static constexpr int kPreambleCount = 1;
 static constexpr float kPreambleDuration = 2.0f;
-static constexpr float kPreambleTotal = kPreambleCount * kPreambleDuration; // 6s
+static constexpr float kPreambleTotal = kPreambleCount * kPreambleDuration; // 2s
 
-// Section 1: self-oscillation sweep
-static constexpr int kSelfOscCount = 128;
-static constexpr float kSelfOscDuration = 1.0f;
-static constexpr int kSelfOscRes = 127;
-
-// Sections 2-3: noise sweeps
-static constexpr int kNoiseCount = 16;
+// 10x10 grid: freq and res both span 0-127 in 10 evenly-spaced steps
+static constexpr int kNoiseCount = 10;
 static constexpr float kNoiseDuration = 2.0f;
-static constexpr int kNoisePositions[16] = {0,8,16,24,32,40,48,56,64,72,80,88,96,104,112,120};
-static constexpr int kNoiseResValues[] = {0, 50};
-static constexpr int kNoiseResSections = 2;
+static constexpr int kNoisePositions[10] = {0, 14, 28, 42, 56, 70, 84, 98, 112, 127};
+static constexpr int kNoiseResValues[] = {0, 14, 28, 42, 56, 70, 84, 98, 112, 127};
+static constexpr int kNoiseResSections = 10;
 
-// Total duration
+static constexpr float kLeadIn = 0.5f; // lead-in before first APR
+
+// Content duration (excludes lead-in; used by render/analyze)
 static constexpr float kTotalDuration =
     kPreambleTotal +
-    kSelfOscCount * kSelfOscDuration +
     kNoiseCount * kNoiseDuration * kNoiseResSections;
+// MIDI duration (includes lead-in; used by gen)
+static constexpr float kMidiDuration = kLeadIn + kTotalDuration;
 
-// SysEx CC mapping
+// SysEx CC indices (IPR: F0 41 32 00 cc val F7)
+static constexpr int kSxNoise   = 0x04;
 static constexpr int kSxVcfFreq = 0x05;
 static constexpr int kSxVcfRes  = 0x06;
-static constexpr int kSxNoise   = 0x04;
-static constexpr int kSxVcfEnv  = 0x07;
-static constexpr int kSxVcfLfo  = 0x08;
-static constexpr int kSxVcfKbd  = 0x09;
-static constexpr int kSxVcaLvl  = 0x0A;
-static constexpr int kSxEnvA    = 0x0B;
-static constexpr int kSxEnvD    = 0x0C;
-static constexpr int kSxEnvS    = 0x0D;
-static constexpr int kSxEnvR    = 0x0E;
-static constexpr int kSxSub     = 0x0F;
-static constexpr int kSxLfoRate = 0x00;
-static constexpr int kSxLfoDly  = 0x01;
-static constexpr int kSxDcoLfo  = 0x02;
-static constexpr int kSxDcoPwm  = 0x03;
 
 // ============================================================
 // MIDI file helpers
@@ -174,6 +147,24 @@ static void addEndOfTrack(std::vector<uint8_t>& track)
     track.push_back(0x00);
 }
 
+// APR (manual mode): F0 41 31 00 00 [16 sliders] [sw1] [sw2] F7
+static void addAPR(std::vector<uint8_t>& track, uint32_t delta,
+                   const uint8_t sliders[16], uint8_t sw1, uint8_t sw2)
+{
+    writeVarLen(track, delta);
+    track.push_back(0xF0);
+    writeVarLen(track, 23); // 23 bytes after F0 including F7
+    track.push_back(0x41);  // Roland ID
+    track.push_back(0x31);  // manual mode (load params)
+    track.push_back(0x00);  // channel
+    track.push_back(0x00);  // patch number (unused in manual mode)
+    for (int i = 0; i < 16; i++)
+        track.push_back(sliders[i]);
+    track.push_back(sw1);
+    track.push_back(sw2);
+    track.push_back(0xF7);
+}
+
 static void writeMidi(const char* filename, const std::vector<uint8_t>& track, uint16_t ticksPerBeat)
 {
     FILE* f = fopen(filename, "wb");
@@ -196,7 +187,7 @@ static void writeMidi(const char* filename, const std::vector<uint8_t>& track, u
     fwrite(track.data(), 1, track.size(), f);
 
     fclose(f);
-    fprintf(stderr, "Wrote %s (%.0fs)\n", filename, kTotalDuration);
+    fprintf(stderr, "Wrote %s (%.0fs)\n", filename, kMidiDuration);
 }
 
 // ============================================================
@@ -214,62 +205,46 @@ static void doGen(const char* outFile)
     std::vector<uint8_t> track;
     addTempo(track, kTempo);
 
-    // --- Patch setup: VCA gate, no oscillators, no chorus, no env mod ---
-    // Switches 1: oct=0 (bit 0), no pulse, no saw, chorus off (bit 5)
-    addSysEx(track, 0, 0x10, 0x21);
-    // Switches 2: PWM LFO, VCF env+, VCA env, HPF flat
-    addSysEx(track, 0, 0x11, 0x04); // VCA gate mode
-    // Zero all modulators
-    addSysEx(track, 0, kSxVcfEnv, 0);
-    addSysEx(track, 0, kSxVcfLfo, 0);
-    addSysEx(track, 0, kSxVcfKbd, 0);
-    addSysEx(track, 0, kSxNoise, 0);
-    addSysEx(track, 0, kSxSub, 0);
-    addSysEx(track, 0, kSxDcoLfo, 0);
-    addSysEx(track, 0, kSxDcoPwm, 0);
-    addSysEx(track, 0, kSxLfoRate, 0);
-    addSysEx(track, 0, kSxLfoDly, 0);
-    addSysEx(track, 0, kSxEnvA, 0);
-    addSysEx(track, 0, kSxEnvD, 0);
-    addSysEx(track, 0, kSxEnvS, 127);
-    addSysEx(track, 0, kSxEnvR, 0);
-    addSysEx(track, 0, kSxVcaLvl, 64); // unity
+    // --- Init patch via APR (0x31 manual mode) ---
+    // Guarantees hardware is in a known state regardless of previous patch.
+    // SysEx slider order: LfoRate, LfoDelay, DcoLfo, DcoPwm,
+    //   Noise, VcfFreq, VcfRes, VcfEnv, VcfLfo, VcfKbd,
+    //   VcaLevel, EnvA, EnvD, EnvS, EnvR, Sub
+    uint8_t initSliders[16] = {
+        0,    // 0x00 LFO Rate = 0
+        0,    // 0x01 LFO Delay = 0
+        0,    // 0x02 DCO LFO = 0
+        0,    // 0x03 DCO PWM = 0
+        0,    // 0x04 Noise = 0
+        64,   // 0x05 VCF Freq = mid (will be overridden per section)
+        0,    // 0x06 VCF Res = 0
+        0,    // 0x07 VCF Env = 0
+        0,    // 0x08 VCF LFO = 0
+        0,    // 0x09 VCF KBD = 0
+        64,   // 0x0A VCA Level = unity
+        0,    // 0x0B Env A = 0
+        0,    // 0x0C Env D = 0
+        127,  // 0x0D Env S = max
+        0,    // 0x0E Env R = 0
+        0     // 0x0F Sub = 0
+    };
+    // SW1: oct=4' (bit 0), no pulse, no saw, chorus off (bit 5)
+    uint8_t initSw1 = 0x21;
+    // SW2: PWM LFO, VCF env+, VCA gate (bit 2), HPF flat
+    // HPF flat = position 1: (3-1)<<3 = 0x10
+    uint8_t initSw2 = 0x04 | 0x10; // gate + HPF flat
+    addAPR(track, 0, initSliders, initSw1, initSw2);
 
     // --- Preamble: calibration blocks ---
+    // 500ms settle time after APR patch load
     // [0] 2s noise, filter wide open, R=0
-    addSysEx(track, 0, kSxVcfFreq, 127);
+    addSysEx(track, k1sTicks / 2, kSxVcfFreq, 127);
     addSysEx(track, 0, kSxVcfRes, 0);
     addSysEx(track, 0, kSxNoise, 127);
     addNoteOn(track, 0, kNote, 127);
     addNoteOff(track, k2sTicks, kNote);
-    addSysEx(track, 0, kSxNoise, 0);
 
-    // [1] 2s saw, filter wide open, R=0
-    // Switches 1: oct=0, pulse=off, SAW=on, chorus off
-    addSysEx(track, 0, 0x10, 0x31); // 0x10 = saw on
-    addNoteOn(track, 0, kNote, 127);
-    addNoteOff(track, k2sTicks, kNote);
-    addSysEx(track, 0, 0x10, 0x21); // saw back off
-
-    // [2] 2s self-osc at byte 64, R=max
-    addSysEx(track, 0, kSxVcfFreq, 64);
-    addSysEx(track, 0, kSxVcfRes, 127);
-    addNoteOn(track, 0, kNote, 127);
-    addNoteOff(track, k2sTicks, kNote);
-
-    // --- Section 1: Self-oscillation sweep ---
-    addSysEx(track, 0, kSxVcfRes, kSelfOscRes);
-    addNoteOn(track, 0, kNote, 127);
-
-    for (int i = 0; i < kSelfOscCount; i++)
-    {
-        addSysEx(track, (i == 0) ? 0 : k1sTicks, kSxVcfFreq, static_cast<uint8_t>(i));
-    }
-
-    // Hold through last position
-    addNoteOff(track, k1sTicks, kNote);
-
-    // --- Section 2 & 3: Noise sweeps ---
+    // --- Noise sweeps ---
     for (int ri = 0; ri < kNoiseResSections; ri++)
     {
         addSysEx(track, 0, kSxVcfRes, static_cast<uint8_t>(kNoiseResValues[ri]));
@@ -334,6 +309,11 @@ static bool readWav(const char* filename, WavData& wav)
             channels = *(uint16_t*)(buf.data() + pos + 10);
             sampleRate = *(uint32_t*)(buf.data() + pos + 12);
             bitsPerSample = *(uint16_t*)(buf.data() + pos + 22);
+            // WAVE_FORMAT_EXTENSIBLE: read actual format from sub-format GUID
+            if (audioFmt == 0xFFFE && chunkSize >= 40)
+            {
+                audioFmt = *(uint16_t*)(buf.data() + pos + 32);
+            }
         }
         else if (memcmp(buf.data() + pos, "data", 4) == 0)
         { dataPtr = buf.data() + pos + 8; dataSize = chunkSize; }
@@ -564,69 +544,54 @@ static NoiseResult analyzeNoise(const float* samples, int numSamples, int sample
     return r;
 }
 
+// Approximate VCF pole frequency for a given firmware byte (J106).
+// DAC = byte * 128 (firmware scaling), kBaseFreq=5.53, kScale=ln2/1143.
+static float estimateCutoffHz(int byte)
+{
+    static constexpr float kBaseFreq = 5.53f;
+    static constexpr float kScale = 0.693147f / 1143.f;
+    float f = kBaseFreq * expf(static_cast<float>(byte * 128) * kScale);
+    // Tanh saturation above 20 kHz (IR3109 expo converter limit)
+    if (f > 20000.f)
+        f = 20000.f + 30000.f * tanhf((f - 20000.f) / 30000.f);
+    return f;
+}
+
 static void doAnalyze(const float* mono, int numSamples, int sampleRate)
 {
+    int leadInSamples = static_cast<int>(kLeadIn * sampleRate);
     int preambleSamples = static_cast<int>(kPreambleDuration * sampleRate);
-    int preambleOffset = static_cast<int>(kPreambleTotal * sampleRate);
 
     // CSV header
-    printf("section,vcf_byte,res,target_hz,freq_hz,minus3db_hz,minus6db_hz,minus12db_hz,minus24db_hz,slope_db_oct,passband_db,peak_hz,prominence_db\n");
+    printf("section,vcf_byte,res,target_hz,minus3db_hz,minus6db_hz,minus12db_hz,minus24db_hz,slope_db_oct,passband_db,peak_hz,prominence_db\n");
 
-    // --- Preamble analysis ---
-    if (preambleSamples <= numSamples)
+    // --- Preamble: noise reference ---
+    int p0 = leadInSamples;
+    if (p0 + preambleSamples <= numSamples)
     {
         float rms = 0;
-        for (int i = 0; i < preambleSamples; i++) rms += mono[i] * mono[i];
+        for (int i = 0; i < preambleSamples; i++) rms += mono[p0 + i] * mono[p0 + i];
         rms = 10.f * log10f(rms / preambleSamples + 1e-30f);
-        printf("preamble_noise,127,0,0,0,0,0,0,0,0,%.1f,0,0\n", rms);
-    }
-    if (2 * preambleSamples <= numSamples)
-    {
-        float rms = 0;
-        const float* seg = mono + preambleSamples;
-        for (int i = 0; i < preambleSamples; i++) rms += seg[i] * seg[i];
-        rms = 10.f * log10f(rms / preambleSamples + 1e-30f);
-        printf("preamble_saw,127,0,0,0,0,0,0,0,0,%.1f,0,0\n", rms);
-    }
-    if (3 * preambleSamples <= numSamples)
-    {
-        float hz = measureFreq(mono + 2 * preambleSamples, preambleSamples, sampleRate);
-        printf("preamble_pitch,64,127,0,%.2f,0,0,0,0,0,0,0,0\n", hz);
+        printf("preamble_noise,127,0,0,0,0,0,0,0,%.1f,0,0\n", rms);
     }
 
-    // --- Section 1: Self-oscillation ---
-    int s1Samples = static_cast<int>(kSelfOscDuration * sampleRate);
-    for (int i = 0; i < kSelfOscCount; i++)
-    {
-        int start = preambleOffset + static_cast<int>(i * kSelfOscDuration * sampleRate);
-        if (start + s1Samples > numSamples) break;
-        float hz = measureFreq(mono + start, s1Samples, sampleRate);
-        printf("self_osc,%d,%d,0,%.2f,0,0,0,0,0,0,0,0\n", i, kSelfOscRes, hz);
-    }
-
-    // --- Sections 2 & 3: Noise ---
-    float s1Total = kPreambleTotal + kSelfOscCount * kSelfOscDuration;
-    int s2Samples = static_cast<int>(kNoiseDuration * sampleRate);
+    // --- Noise sections ---
+    float noiseStart = kLeadIn + kPreambleTotal;
+    int noiseSamples = static_cast<int>(kNoiseDuration * sampleRate);
 
     for (int ri = 0; ri < kNoiseResSections; ri++)
     {
         int res = kNoiseResValues[ri];
         for (int i = 0; i < kNoiseCount; i++)
         {
-            float tStart = s1Total + (ri * kNoiseCount + i) * kNoiseDuration;
+            float tStart = noiseStart + (ri * kNoiseCount + i) * kNoiseDuration;
             int start = static_cast<int>(tStart * sampleRate);
-            if (start + s2Samples > numSamples) break;
+            if (start + noiseSamples > numSamples) break;
 
-            int selfIdx = kNoisePositions[i];
-            int selfStart = preambleOffset + static_cast<int>(selfIdx * kSelfOscDuration * sampleRate);
-            float targetHz = 248.f;
-            if (selfStart + s1Samples <= numSamples)
-                targetHz = measureFreq(mono + selfStart, s1Samples, sampleRate);
-            if (targetHz <= 0.f) targetHz = 248.f;
+            float targetHz = estimateCutoffHz(kNoisePositions[i]);
+            NoiseResult nr = analyzeNoise(mono + start, noiseSamples, sampleRate, targetHz);
 
-            NoiseResult nr = analyzeNoise(mono + start, s2Samples, sampleRate, targetHz);
-
-            printf("noise,%d,%d,%.1f,0,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f\n",
+            printf("noise,%d,%d,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f\n",
                    kNoisePositions[i], res, targetHz,
                    nr.minus3dbHz, nr.minus6dbHz, nr.minus12dbHz, nr.minus24dbHz,
                    nr.slopeDbOct, nr.passbandDb, nr.peakHz, nr.prominenceDb);
@@ -702,7 +667,7 @@ static void doRender(const char* outFile, int sampleRate)
     dsp.Reset(static_cast<double>(sampleRate), kBlockSize);
     initPatch(dsp);
 
-    int totalSamples = static_cast<int>(kTotalDuration * sampleRate);
+    int totalSamples = static_cast<int>(kMidiDuration * sampleRate);
     std::vector<float> audio(totalSamples, 0.f);
 
     std::vector<float> bufL(kBlockSize), bufR(kBlockSize);
@@ -722,6 +687,7 @@ static void doRender(const char* outFile, int sampleRate)
     };
 
     // --- Preamble ---
+    render(kLeadIn); // lead-in silence
     // [0] Noise, filter wide open, R=0
     setParam(dsp, kVcfFreq, 1.f);
     setParam(dsp, kVcfRes, 0.f);
@@ -729,33 +695,8 @@ static void doRender(const char* outFile, int sampleRate)
     dsp.NoteOn(kNote, 127);
     render(kPreambleDuration);
     dsp.NoteOff(kNote);
-    setParam(dsp, kDcoNoise, 0.f);
-    // [1] Saw, filter wide open, R=0
-    setParam(dsp, kDcoSaw, 1.f);
-    dsp.NoteOn(kNote, 127);
-    render(kPreambleDuration);
-    dsp.NoteOff(kNote);
-    setParam(dsp, kDcoSaw, 0.f);
-    // [2] Self-osc at byte 64, R=max
-    setParam(dsp, kVcfFreq, 64.f / 127.f);
-    setParam(dsp, kVcfRes, 1.f);
-    dsp.NoteOn(kNote, 127);
-    render(kPreambleDuration);
-    dsp.NoteOff(kNote);
-    // --- Section 1: Self-oscillation sweep ---
-    setParam(dsp, kVcfRes, kSelfOscRes / 127.f);
-    setParam(dsp, kDcoNoise, 0.f);
-    dsp.NoteOn(kNote, 127);
 
-    for (int i = 0; i < kSelfOscCount; i++)
-    {
-        setParam(dsp, kVcfFreq, i / 127.f);
-        render(kSelfOscDuration);
-    }
-
-    dsp.NoteOff(kNote);
-
-    // Sections 2 & 3: Noise
+    // --- Noise sweeps ---
     for (int ri = 0; ri < kNoiseResSections; ri++)
     {
         setParam(dsp, kVcfRes, kNoiseResValues[ri] / 127.f);
@@ -870,8 +811,8 @@ int main(int argc, char* argv[])
         fprintf(stderr, "  filter_test3 render output.wav [sr]  Render through DSP + analyze\n");
         fprintf(stderr, "  filter_test3 analyze input.wav       Analyze a recording\n");
         fprintf(stderr, "  filter_test3 profile [sr]            Sweep all 128 R x 16 freq (internal)\n");
-        fprintf(stderr, "\nTest grid: %d self-osc + %d noise x %d res = %.0fs total\n",
-                kSelfOscCount, kNoiseCount, kNoiseResSections, kTotalDuration);
+        fprintf(stderr, "\nTest grid: %d freq x %d res = %.0fs total\n",
+                kNoiseCount, kNoiseResSections, kMidiDuration);
         return 1;
     }
 

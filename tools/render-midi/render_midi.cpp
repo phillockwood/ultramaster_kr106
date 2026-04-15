@@ -341,11 +341,15 @@ int main(int argc, char* argv[])
 
     // Check for flags anywhere in args
     bool mono = false;
+    bool raw = false;
+    float attenuation = 1.f;
     int bits = 24;
     for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "--mono") == 0) mono = true;
         if (strcmp(argv[i], "--16bit") == 0) bits = 16;
+        if (strcmp(argv[i], "--raw") == 0) raw = true;
+        if (strncmp(argv[i], "--gain=", 7) == 0) attenuation = static_cast<float>(atof(argv[i] + 7));
     }
 
     auto isFlag = [](const char* s) { return s[0] == '-' && s[1] == '-'; };
@@ -446,7 +450,18 @@ int main(int argc, char* argv[])
             fprintf(stderr, "  %.0f / %.0f sec\n", samplesRendered / sr, numSamples / sr);
     }
 
-    // Normalize to -1 dBFS
+    // Apply gain (e.g. --gain=0.35 for A/B level matching)
+    if (attenuation != 1.f)
+    {
+        for (int i = 0; i < numSamples; i++)
+        {
+            outL[i] *= attenuation;
+            outR[i] *= attenuation;
+        }
+        fprintf(stderr, "Applied gain: %.6f (%+.1f dB)\n", attenuation, 20.f * log10f(attenuation));
+    }
+
+    // Normalize to -1 dBFS (unless --raw)
     float peak = 0.f;
     for (int i = 0; i < numSamples; i++)
     {
@@ -456,7 +471,7 @@ int main(int argc, char* argv[])
     fprintf(stderr, "Raw peak: %.4f (%.1f dBFS)\n", peak,
             peak > 1e-10f ? 20.f * log10f(peak) : -200.f);
 
-    if (peak > 1e-10f)
+    if (!raw && peak > 1e-10f)
     {
         float gain = 0.891f / peak; // -1 dBFS
         for (int i = 0; i < numSamples; i++)

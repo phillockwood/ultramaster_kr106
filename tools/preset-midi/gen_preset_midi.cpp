@@ -50,21 +50,6 @@ static void write32(std::vector<uint8_t>& buf, uint32_t val)
     buf.push_back(val & 0xFF);
 }
 
-static void addSysEx(std::vector<uint8_t>& track, uint32_t delta,
-                     uint8_t ctrl, uint8_t val)
-{
-    // Roland Juno-106 IPR SysEx: F0 41 32 00 ctrl val F7
-    writeVarLen(track, delta);
-    track.push_back(0xF0);
-    writeVarLen(track, 6);
-    track.push_back(0x41);
-    track.push_back(0x32);
-    track.push_back(0x00);
-    track.push_back(ctrl);
-    track.push_back(val);
-    track.push_back(0xF7);
-}
-
 // SysEx CC 0x00-0x0F -> preset value array index
 static const int kSysExToPresetIdx[16] = {
     3,   // 0x00 = kLfoRate
@@ -299,20 +284,24 @@ static void generateBatchMidi(int start, int end, const char* filename)
 
 int main(int argc, char* argv[])
 {
+    // J60 presets are indices 0-127, J106 presets are 128-255
+    static constexpr int kJ106Offset = 128;
+    static constexpr int kJ106Count = 128;
+
     if (argc > 1 && strcmp(argv[1], "batch") == 0)
     {
-        // Generate bank files: A1x, A2x, A3x, ... B8x (8 presets each)
+        // Generate bank files: A1x-A8x, B1x-B8x (J106 presets only)
         const char* bankNames[] = {
             "A1x", "A2x", "A3x", "A4x", "A5x", "A6x", "A7x", "A8x",
             "B1x", "B2x", "B3x", "B4x", "B5x", "B6x", "B7x", "B8x"
         };
         const char* outDir = (argc > 2) ? argv[2] : ".";
 
-        fprintf(stderr, "Generating batch MIDI files (8 presets each)...\n");
+        fprintf(stderr, "Generating batch MIDI files (8 presets each, J106 only)...\n");
         for (int bank = 0; bank < 16; bank++)
         {
-            int start = bank * 8;
-            int end = std::min(start + 8, kNumFactoryPresets);
+            int start = kJ106Offset + bank * 8;
+            int end = std::min(start + 8, kJ106Offset + kJ106Count);
             char filename[256];
             snprintf(filename, sizeof(filename), "%s/bank_%s.mid", outDir, bankNames[bank]);
             generateBatchMidi(start, end, filename);
@@ -324,20 +313,20 @@ int main(int argc, char* argv[])
     if (argc > 1 && strcmp(argv[1], "all") == 0)
     {
         const char* outDir = (argc > 2) ? argv[2] : ".";
-        fprintf(stderr, "Generating individual MIDI files for %d presets...\n", kNumFactoryPresets);
-        for (int i = 0; i < kNumFactoryPresets; i++)
-            generatePresetMidi(i, outDir);
+        fprintf(stderr, "Generating individual MIDI files for %d J106 presets...\n", kJ106Count);
+        for (int i = 0; i < kJ106Count; i++)
+            generatePresetMidi(kJ106Offset + i, outDir);
         fprintf(stderr, "Done.\n");
         return 0;
     }
 
     if (argc > 1)
     {
-        int idx = atoi(argv[1]);
-        if (idx < 0 || idx >= kNumFactoryPresets)
+        int idx = atoi(argv[1]) + kJ106Offset;
+        if (idx < kJ106Offset || idx >= kJ106Offset + kJ106Count)
         {
             fprintf(stderr, "Error: preset index %d out of range (0-%d)\n",
-                    idx, kNumFactoryPresets - 1);
+                    atoi(argv[1]), kJ106Count - 1);
             return 1;
         }
         const char* outDir = (argc > 2) ? argv[2] : ".";
