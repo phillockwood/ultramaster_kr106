@@ -18,10 +18,10 @@ static constexpr float kNoiseAmpJ6  = 1.f;       // Noise level (J6 calibration)
 // to noise RMS at HPF flat, VCF wide open).
 // Sub/pulse ratio: 1.51x from osc_calibrate recording (both square waves,
 // ratio is recording-gain-independent).
-static constexpr float kSawAmpJ106   = 0.5f;     // scaled to match J6 saw level
-static constexpr float kPulseAmpJ106 = 0.417f;   // 0.834x saw (hardware measurement)
-static constexpr float kSubAmpJ106   = 0.630f;   // 1.51x pulse, +5.3 dB vs saw (hardware cal)
-static constexpr float kNoiseAmpJ106 = 1.385f;   // 2.77x saw (39K mixing R, hardware cal)
+static constexpr float kSawAmpJ106    = 0.5f;      // SAW is 0v to 12v
+static constexpr float kPulseAmpJ106  = 0.5f;      // PULSE is 0v to +12v TL074
+static constexpr float kSubAmpJ106    = 0.75f;   
+static constexpr float kNoiseAmpJ106  = 1.f;
 
 static constexpr float kSwitchRamp = 1.f / 64.f; // ~1.5ms at 44.1k
 } // namespace kr106
@@ -60,8 +60,18 @@ namespace kr106 {
 struct SawTables {
   static constexpr int kSize = 4096;
   static constexpr int kMask = kSize - 1;
-  static constexpr int kNumTables = 11; // octaves 0–10 (C0 through ~C10)
-  static constexpr float kBaseFreq = 16.352f; // C0 in Hz
+  static constexpr int kNumTables = 12; // octaves -1 to 10 (C-1/MIDI 0 through ~C10)
+  static constexpr float kBaseFreq = 8.176f;  // C-1 / MIDI note 0 in Hz
+
+  // Note on table coverage:
+  //   Table 0 covers fundamentals 8.18 Hz (C-1, MIDI 0) up to 16.35 Hz (C0).
+  //   Table 1 covers 16.35 Hz (C0) up to 32.70 Hz (C1).
+  //   Table N covers fundamentals up to kBaseFreq * 2^(N+1).
+  // This guarantees full harmonic coverage to Nyquist for every MIDI note
+  // 0–127, even with the octave-down transpose. The bottom table (0) is
+  // ~16 KB extra storage and is only consulted for fundamentals below C0,
+  // which on a 5-octave Juno keyboard requires the octave-down switch +
+  // playing the bottom octave + a transpose-down configuration.
 
   float tables[kNumTables][kSize] = {};
   float sampleRate = 44100.f; // the rate at which the osc will be READ
@@ -156,8 +166,11 @@ struct SawTables {
   // octave = log2f(freq / kBaseFreq).
   // Table t covers fundamentals up to kBaseFreq * 2^(t+1), so a note
   // at exactly the boundary should use table t, not t+1. The -1 offset
-  // ensures the mapping is correct: at 261.6 Hz (octave 4.0), tblIdx=3
-  // with blend=1.0, reading fully from table 3 (183 harmonics at 96k).
+  // ensures the mapping is correct: at 261.6 Hz (octave 5.0 since
+  // kBaseFreq is now C-1), tblIdx=4 with blend=1.0, reading fully
+  // from table 4 (covers up to C4). The clamp prevents underflow for
+  // sub-MIDI-0 frequencies (which shouldn't ever happen) and overflow
+  // past the top table.
   static void OctaveToTable(float octave, int& tblIdx, float& blend) {
     octave = std::max(0.f, std::min(octave - 1.f, static_cast<float>(kNumTables - 2)));
     tblIdx = static_cast<int>(octave);
