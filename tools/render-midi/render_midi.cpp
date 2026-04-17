@@ -386,7 +386,7 @@ int main(int argc, char* argv[])
     setParam(dsp, kAdsrMode, 1.f);  // J106
     dsp.mMasterVol = 0.5f * 0.5f;   // match plugin default (squared taper)
     setParam(dsp, kVcaLevel, 0.5f); // unity gain (~0 dB)
-    setParam(dsp, kPortaMode, 2.f);  // Poly II (round robin)
+    setParam(dsp, kPortaMode, 1.f);  // Poly II (round robin)
     setParam(dsp, kDcoSubSw, 1.f);  // Sub always available (no switch on J106)
 
     // Convert event ticks to sample positions

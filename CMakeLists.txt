@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KR106 VERSION 2.5.7)
+project(KR106 VERSION 2.5.8)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version")
 
@@ -66,6 +66,7 @@ target_sources(KR106 PRIVATE
     Source/DSP/KR106Chorus.h
     Source/DSP/KR106LFO.h
     Source/DSP/KR106Noise.h
+    Source/DSP/KR106Resampler.h
 
     Source/DSP/KR106VCF.h
     Source/DSP/KR106VCF_OPTIMIZED.h
@@ -164,7 +165,8 @@ if(APPLE)
         Source/DSP/KR106Chorus.h
         Source/DSP/KR106LFO.h
         Source/DSP/KR106Noise.h
-    
+        Source/DSP/KR106Resampler.h
+
         Source/DSP/KR106VCF.h
         Source/DSP/KR106VCF_OPTIMIZED.h
         Source/DSP/KR106VcfFreqJ106.h

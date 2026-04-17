@@ -957,9 +957,7 @@ private:
         float fcSlider = fc;
         float sr = static_cast<float>(mProcessor->getSampleRate());
         float nyq = std::max(sr * 0.5f, 1.f);
-        float frqNorm = fc / nyq; // normalized to Nyquist, matches VCF::Process frq
-        fc *= kr106::VCF::FreqCompensationClamped(k, frqNorm * 0.25f, res * 127.f, sr);
-        float comp = kr106::VCF::InputComp(k, frqNorm);
+        float comp = kr106::VCF::InputComp(k);
 
         // Display range
         static constexpr float kMinHz = 5.f;
