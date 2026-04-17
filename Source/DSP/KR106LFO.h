@@ -173,11 +173,22 @@ struct LFO
   //
   // Clean-room piecewise linear approximation of 0C60_lfoSpeedTbl.
   // Slopes and breakpoints derived from curve analysis of the table
-  // shape: linear 0–63 (slope 10), linear 64–95 (slope 16),
-  // then accelerating 96–127 in four sub-segments.
+  // shape: a slow-rate fine-control region (idx 0–7), then linear
+  // 8–63 (slope 10), 64–95 (slope 16), then accelerating 96–127 in
+  // four sub-segments.
+  //
+  // The bottom 8 entries are not a single linear ramp — the ROM
+  // values (5, 15, 25, 40, 55, 70, 80, 90) describe a 4-segment
+  // sub-curve with slopes +10, +15, +10. This gives finer LFO-rate
+  // control at the very slowest settings, important for ambient/drone
+  // patches where the LFO is set to many-second cycles.
   static float lfoSpeedCoeff(float i)
   {
-    if (i < 8.f)   return 5.f + i * 12.14f;              // slow ramp
+    // Bottom region: 4-segment match for ROM idx 0–7.
+    if (i < 1.f)   return 5.f  + i * 10.f;
+    if (i < 3.f)   return 15.f + (i - 1.f) * 10.f;  // +10 per step
+    if (i < 6.f)   return 25.f + (i - 2.f) * 15.f;  // +15 per step  (idx 3,4,5 = 40,55,70)
+    if (i < 8.f)   return 70.f + (i - 5.f) * 10.f;  // +10 per step  (idx 6,7 = 80,90)
     if (i < 64.f)  return 20.f + i * 10.f;               // linear, step=10
     if (i < 96.f)  return -358.f + i * 16.f;             // linear, step=16
     if (i < 104.f) return 1214.f + (i - 96.f) * 52.3f;   // accelerating
