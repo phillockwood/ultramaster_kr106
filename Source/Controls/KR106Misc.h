@@ -54,7 +54,7 @@ public:
         if (on)
         {
             HLine(g, gray, 4.f, 11.f, 11.f);
-            HLine(g, red,  6.f, 13.f, 10.f);
+            HLine(g, red,  5.5f, 13.f, 10.f);
         }
         else
         {

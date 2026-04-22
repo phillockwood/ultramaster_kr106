@@ -4,6 +4,7 @@
 #include <atomic>
 #include <bitset>
 #include "DSP/KR106_DSP.h"
+#include "DSP/KR106SysEx.h"
 #include "KR106PresetManager.h"
 
 // Parameter indices — must match KR106DSP::SetParam's internal enum
@@ -186,8 +187,6 @@ private:
   bool mPresetClean = false; // true after preset load, cleared on first param edit
 
   // SysEx switch byte decode helpers (shared by IPR and APR receive)
-  void decodeSwitches1(uint8_t val);
-  void decodeSwitches2(uint8_t val);
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(KR106AudioProcessor)
 };

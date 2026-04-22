@@ -859,67 +859,46 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     {
       auto* data = msg.getSysExData();
       int len = msg.getSysExDataSize();
-      if (len >= 4 && data[0] == 0x41)
-      {
-        int cmd = data[1];
 
-        if (cmd == 0x32 && len >= 5)
-        {
-          // IPR (Individual Parameter): F0 41 32 0n cc vv F7
-          int ctrl = data[3];
-          int val  = data[4];
-          if (ctrl <= 0x0F)
-          {
-            // J106: R5/R6 limit PWM slider to byte 105
-            if (ctrl == 0x03) {
-              val = juce::jmin(val, 105);
-              mParams[kSysExToParam[ctrl]]->setValueNotifyingHost(val / 105.f);
-            } else
-              mParams[kSysExToParam[ctrl]]->setValueNotifyingHost(val / 127.f);
-            // J106 has no sub switch; infer from sub level
-            if (ctrl == 0x0F)
-              mParams[kDcoSubSw]->setValueNotifyingHost(val > 0 ? 1.f : 0.f);
-          }
-          else if (ctrl == 0x10)
-            decodeSwitches1(val);
-          else if (ctrl == 0x11)
-            decodeSwitches2(val);
-        }
-        else if ((cmd == 0x30 || cmd == 0x31) && len >= 21)
-        {
-          // APR: F0 41 30 0n pp [16 sliders] [sw1] [sw2] F7
-          // 0x30 = bank/patch change, 0x31 = manual mode
-          int patchNum = data[3];
-          const uint8_t* p = data + 4;
+      // Shared SysEx decoder: outputs (paramIdx, denormalized value) pairs.
+      // Slider params (0-15) arrive as 0-1 floats; switch params arrive
+      // as denormalized ints (e.g. oct 0/1/2, HPF 0-3). We normalize
+      // switches via convertTo0to1 and set sliders directly.
+      kr106::SysExDecoder sxd = {
+          kLfoRate, kLfoDelay, kDcoLfo, kDcoPwm,
+          kDcoNoise, kVcfFreq, kVcfRes, kVcfEnv,
+          kVcfLfo, kVcfKbd, kVcaLevel, kEnvA,
+          kEnvD, kEnvS, kEnvR, kDcoSub,
+          kOctTranspose, kDcoPulse, kDcoSaw,
+          kChorusOff, kChorusI, kChorusII,
+          kPwmMode, kVcfEnvInv, kVcaMode, kHpfFreq,
+          kDcoSubSw, true // always J106 for SysEx
+      };
 
-          // Set all 18 params
-          for (int cc = 0; cc < 16; cc++) {
-            int v = p[cc];
-            // J106: R5/R6 limit PWM slider to byte 105
-            if (cc == 0x03) {
-              v = juce::jmin(v, 105);
-              mParams[kSysExToParam[cc]]->setValueNotifyingHost(v / 105.f);
-            } else
-              mParams[kSysExToParam[cc]]->setValueNotifyingHost(v / 127.f);
-          }
-          decodeSwitches1(p[16]);
-          decodeSwitches2(p[17]);
-          // J106 has no sub switch; infer from sub level (cc 0x0F)
-          mParams[kDcoSubSw]->setValueNotifyingHost(p[0x0F] > 0 ? 1.f : 0.f);
-
-          if (cmd == 0x30)
-          {
-            // Bank/patch change: select the patch slot
-            int numPresets = getNumPrograms();
-            if (patchNum >= 0 && patchNum < numPresets)
-              mCurrentPreset = patchNum;
-            mInitialDefault = false;
-          }
+      auto sxSetParam = [this](int idx, float val) {
+          auto* p = mParams[idx];
+          if (!p) return;
+          auto range = p->getNormalisableRange();
+          if (range.start == 0.f && range.end == 1.f)
+            p->setValueNotifyingHost(val);
           else
-          {
-            // Manual mode: no preset selected
-            mInitialDefault = true;
-          }
+            p->setValueNotifyingHost(p->convertTo0to1(val));
+      };
+
+      int patchNum = -1;
+      if (sxd.decode(data, len, sxSetParam, &patchNum))
+      {
+        // Post-decode: handle patch number for APR messages
+        if (len >= 4 && data[1] == 0x30 && patchNum >= 0)
+        {
+          int numPresets = getNumPrograms();
+          if (patchNum < numPresets)
+            mCurrentPreset = patchNum;
+          mInitialDefault = false;
+        }
+        else if (len >= 4 && data[1] == 0x31)
+        {
+          mInitialDefault = true;
         }
       }
     }
@@ -1139,28 +1118,6 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
   // --- Merge outgoing MIDI into the host buffer ---
   midiMessages.addEvents(midiOut, 0, nFrames, 0);
-}
-
-void KR106AudioProcessor::decodeSwitches1(uint8_t val)
-{
-    int oct = (val & 0x04) ? 2 : (val & 0x02) ? 1 : 0;
-    mParams[kOctTranspose]->setValueNotifyingHost(mParams[kOctTranspose]->convertTo0to1(static_cast<float>(oct)));
-    mParams[kDcoPulse]->setValueNotifyingHost((val & 0x08) ? 1.f : 0.f);
-    mParams[kDcoSaw]->setValueNotifyingHost((val & 0x10) ? 1.f : 0.f);
-    bool chorusOn = !(val & 0x20);
-    bool chorusL1 = (val & 0x40) != 0;
-    mParams[kChorusOff]->setValueNotifyingHost(chorusOn ? 0.f : 1.f);
-    mParams[kChorusI]->setValueNotifyingHost((chorusOn && chorusL1) ? 1.f : 0.f);
-    mParams[kChorusII]->setValueNotifyingHost((chorusOn && !chorusL1) ? 1.f : 0.f);
-}
-
-void KR106AudioProcessor::decodeSwitches2(uint8_t val)
-{
-    mParams[kPwmMode]->setValueNotifyingHost(mParams[kPwmMode]->convertTo0to1(static_cast<float>((val & 0x01) ? 1 : 0))); // bit=1 is MAN/ENV
-    mParams[kVcfEnvInv]->setValueNotifyingHost((val & 0x02) ? 1.f : 0.f);
-    mParams[kVcaMode]->setValueNotifyingHost((val & 0x04) ? 1.f : 0.f); // bit=1 is GATE
-    int hpf = 3 - ((val >> 3) & 0x03);
-    mParams[kHpfFreq]->setValueNotifyingHost(mParams[kHpfFreq]->convertTo0to1(static_cast<float>(hpf)));
 }
 
 void KR106AudioProcessor::parameterChanged(int paramIdx, float newValue)
