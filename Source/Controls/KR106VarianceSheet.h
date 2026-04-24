@@ -30,7 +30,7 @@ public:
         {
             mAnalogNoiseKnob = mulToKnob(mProcessor->mDSP.mNoiseFloorMul);
             mMainsNoiseKnob = mulToKnob(mProcessor->mDSP.mMainsMul);
-            mClockNoiseKnob = mulToKnob(mProcessor->mDSP.mChorus.mClockMul);
+            mClockNoiseKnob = mProcessor->mDSP.mChorus.mClockMul; // linear 0-1
             mBbdDriveKnob = mProcessor->mDSP.mChorus.mBbdDriveUser / 100.f;
             // Note: chorus mAnalogMul is always kept in sync with mNoiseFloorMul
         }
@@ -112,7 +112,7 @@ public:
             int colW7 = w / kTotalCols;
             paintNoiseCell(-5, 0,            colW7,  "ANALOG",    mAnalogNoiseKnob);
             paintNoiseCell(-6, colW7,        colW7,  "MAINS",     mMainsNoiseKnob);
-            paintNoiseCell(-7, colW7 * 2,    colW7,  "CLOCK",     mClockNoiseKnob);
+            paintNoiseCell(-7, colW7 * 2,    colW7,  "CHORUS",    mClockNoiseKnob);
             paintNoiseCell(-8, colW7 * 3,    colW7,  "BBD DRIVE", mBbdDriveKnob);
         }
 
@@ -513,7 +513,7 @@ private:
         mProcessor->mDSP.mChorus.mAnalogMul = analogMul;
         mProcessor->mDSP.mMainsMul = knobToMul(mMainsNoiseKnob);
         mProcessor->mDSP.mChorus.mMainsMul = knobToMul(mMainsNoiseKnob);
-        mProcessor->mDSP.mChorus.mClockMul = knobToMul(mClockNoiseKnob);
+        mProcessor->mDSP.mChorus.mClockMul = mClockNoiseKnob; // linear 0-1, default 0.5
         // BBD drive: userVal 0..100, k = 0.48 * (userVal/100)^2
         float userVal = mBbdDriveKnob * 100.f;
         mProcessor->mDSP.mChorus.mBbdDriveUser = userVal;

@@ -432,7 +432,7 @@ KR106AudioProcessor::KR106AudioProcessor()
   addBool(kSettingArpSync,       "Arp Sync Host",      false);
   addBool(kSettingLfoSync,       "LFO Sync Host",      false);
   addBool(kSettingMonoRetrig,    "Mono Retrigger",     true);
-  addBool(kSettingMidiSysEx,     "MIDI SysEx",         false);
+  addBool(kSettingMidiSysEx,     "Send MIDI SysEx",         false);
   addSwitch(kArpQuantize,        "Arp Quantize",       kr106::kDiv16, 0, kr106::kNumArpDivisions - 1,
     [](int v, int) { return juce::String(kr106::kDivNames[v]); });
   addSwitch(kLfoQuantize,        "LFO Quantize",       kr106::kLfoDiv4, 0, kr106::kNumLfoDivisions - 1,
@@ -1395,6 +1395,7 @@ void KR106AudioProcessor::setStateInformation(const void* data, int sizeInBytes)
       }
     }
   }
+
 }
 
 // --- Program / Preset management ---

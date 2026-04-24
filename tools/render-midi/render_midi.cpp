@@ -45,13 +45,6 @@ enum EParams
   kNumParams
 };
 
-// SysEx CC → EParam mapping (same as PluginProcessor.cpp)
-static constexpr int kSysExToParam[16] = {
-  kLfoRate, kLfoDelay, kDcoLfo, kDcoPwm,
-  kDcoNoise, kVcfFreq, kVcfRes, kVcfEnv,
-  kVcfLfo, kVcfKbd, kVcaLevel, kEnvA,
-  kEnvD, kEnvS, kEnvR, kDcoSub,
-};
 
 // --- Simple MIDI file parser ---
 
@@ -293,7 +286,7 @@ static std::string getSettingsPath()
     if (appdata) return std::string(appdata) + "\\KR106\\settings.json";
 #else
     const char* home = getenv("HOME");
-    if (home) return std::string(home) + "/Library/Application Support/KR106/settings.json";
+    if (home) return std::string(home) + "/Library/KR106/settings.json";
 #endif
     return {};
 }
@@ -342,54 +335,28 @@ static void setParam(KR106DSP<float>& dsp, int param, float value)
     dsp.SetParam(param, static_cast<double>(value));
 }
 
-static void decodeSwitches1(KR106DSP<float>& dsp, uint8_t val)
-{
-    int oct = (val & 0x04) ? 2 : (val & 0x02) ? 1 : 0;
-    setParam(dsp, kOctTranspose, static_cast<float>(oct));
-    setParam(dsp, kDcoPulse, (val & 0x08) ? 1.f : 0.f);
-    setParam(dsp, kDcoSaw, (val & 0x10) ? 1.f : 0.f);
-    bool chorusOn = !(val & 0x20);
-    bool chorusL1 = (val & 0x40) != 0;
-    setParam(dsp, kChorusOff, chorusOn ? 0.f : 1.f);
-    setParam(dsp, kChorusI, (chorusOn && chorusL1) ? 1.f : 0.f);
-    setParam(dsp, kChorusII, (chorusOn && !chorusL1) ? 1.f : 0.f);
-}
+#include "../../Source/DSP/KR106SysEx.h"
 
-static void decodeSwitches2(KR106DSP<float>& dsp, uint8_t val)
+static kr106::SysExDecoder makeSysExDecoder(bool j106)
 {
-    setParam(dsp, kPwmMode, (val & 0x01) ? 1.f : 0.f); // bit=1 is MAN/ENV
-    setParam(dsp, kVcfEnvInv, (val & 0x02) ? 1.f : 0.f);
-    setParam(dsp, kVcaMode, (val & 0x04) ? 1.f : 0.f); // bit=1 is GATE
-    int hpf = 3 - ((val >> 3) & 0x03);
-    setParam(dsp, kHpfFreq, static_cast<float>(hpf));
+    return {
+        kLfoRate, kLfoDelay, kDcoLfo, kDcoPwm,
+        kDcoNoise, kVcfFreq, kVcfRes, kVcfEnv,
+        kVcfLfo, kVcfKbd, kVcaLevel, kEnvA,
+        kEnvD, kEnvS, kEnvR, kDcoSub,
+        kOctTranspose, kDcoPulse, kDcoSaw,
+        kChorusOff, kChorusI, kChorusII,
+        kPwmMode, kVcfEnvInv, kVcaMode, kHpfFreq,
+        -1, j106  // kDcoSubSw = -1: skip sub switch inference (set at init)
+    };
 }
 
 static void handleSysEx(KR106DSP<float>& dsp, const uint8_t* data, int len)
 {
-    if (len < 4 || data[0] != 0x41) return;
-    int cmd = data[1];
-
-    if (cmd == 0x32 && len >= 5)
-    {
-        // IPR (Individual Parameter): 41 32 0n cc vv
-        int ctrl = data[3];
-        int val = data[4];
-        if (ctrl <= 0x0F)
-            setParam(dsp, kSysExToParam[ctrl], val / 127.f);
-        else if (ctrl == 0x10)
-            decodeSwitches1(dsp, static_cast<uint8_t>(val));
-        else if (ctrl == 0x11)
-            decodeSwitches2(dsp, static_cast<uint8_t>(val));
-    }
-    else if ((cmd == 0x30 || cmd == 0x31) && len >= 21)
-    {
-        // APR (All Parameter): 41 30 0n pp [16 sliders] [sw1] [sw2]
-        const uint8_t* p = data + 4;
-        for (int cc = 0; cc < 16; cc++)
-            setParam(dsp, kSysExToParam[cc], p[cc] / 127.f);
-        decodeSwitches1(dsp, p[16]);
-        decodeSwitches2(dsp, p[17]);
-    }
+    auto decoder = makeSysExDecoder(dsp.mSynthModel == kr106::kJ106);
+    decoder.decode(data, len, [&](int param, float value) {
+        setParam(dsp, param, value);
+    });
 }
 
 int main(int argc, char* argv[])

@@ -387,11 +387,12 @@ void KR106Editor::showSettingsMenu()
     items.push_back(KR106MenuItem::item(24, "Sync Arp to Host",      true, mProcessor.mArpSyncHost));
     items.push_back(KR106MenuItem::item(25, "Sync LFO to Host",      true, mProcessor.mLfoSyncHost));
     items.push_back(KR106MenuItem::item(22, "Mono Retrigger",        true, mProcessor.mMonoRetrigger));
-    items.push_back(KR106MenuItem::item(26, "MIDI SysEx",       true, mProcessor.mMidiOutSysEx));
+    items.push_back(KR106MenuItem::item(26, "SEND MIDI SysEx",       true, mProcessor.mMidiOutSysEx));
     items.push_back(KR106MenuItem::sep());
     { auto* oscP = mProcessor.getParam(kSettingOscMode);
       bool blep = oscP && oscP->getValue() > 0.5f;
-      items.push_back(KR106MenuItem::item(27, "PolyBLEP Oscillator", true, blep)); }
+      items.push_back(KR106MenuItem::makeRadio(28, "PolyBLEP DCO", blep));
+      items.push_back(KR106MenuItem::makeRadio(29, "Wavetable DCO", !blep)); }
     items.push_back(KR106MenuItem::sep());
     items.push_back(KR106MenuItem::makeAction(40, "Component Variance Editor"));
     items.push_back(KR106MenuItem::makeAction(41, "Keyboard Shortcuts"));
@@ -429,7 +430,11 @@ void KR106Editor::showSettingsMenu()
             if (r == 25) toggleBoolParam(kSettingLfoSync);
             if (r == 22) toggleBoolParam(kSettingMonoRetrig);
             if (r == 26) toggleBoolParam(kSettingMidiSysEx);
-            if (r == 27) toggleBoolParam(kSettingOscMode);
+            if (r == 28 || r == 29)
+            {
+                auto* p = mProcessor.getParam(kSettingOscMode);
+                p->setValueNotifyingHost(r == 28 ? 1.f : 0.f);
+            }
             if (r == 40)
             {
                 mSettingsMenu.reset();

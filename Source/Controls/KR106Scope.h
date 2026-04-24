@@ -447,6 +447,25 @@ public:
                 mHasData = true;
             }
         }
+        else
+        {
+            // No sync pulses (noise only, self-osc only, etc.).
+            // Show the most recent samples as a free-running display
+            // so the scope stays active rather than freezing on stale data.
+            int freeLen = std::min(mSamplesAvail, RING_SIZE / 2);
+            if (freeLen > 1)
+            {
+                mDisplayLen = freeLen;
+                int startIdx = (mRingWritePos - freeLen + RING_SIZE) % RING_SIZE;
+                for (int i = 0; i < freeLen; i++)
+                {
+                    int idx = (startIdx + i) % RING_SIZE;
+                    mDisplay[i]  = mRing[idx];
+                    mDisplayR[i] = mRingR[idx];
+                }
+                mHasData = true;
+            }
+        }
 
         repaint();
     }
