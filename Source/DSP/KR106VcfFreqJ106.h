@@ -142,16 +142,13 @@ inline uint16_t calc_vcf_bend_amt(
       static_cast<uint16_t>(vcfBendSens) * bendVal >> 4);
 }
 
-
 /**
  * Convert DAC value to VCF cutoff frequency in Hz.
  *
  * ═══════════════════════════════════════════════════════════════════════
- * This value was derived by cross-referencing the uPD7810 ROM calibration
- * patch, the service manual's 248 Hz tuning target, factory preset sysex
- * data, Cherry Audio DCO-106 preset analysis, and spectral measurements
- * of recordings from a real Juno-106. The original kBaseFreq of 0.998
- * placed all VCF frequencies ~2.5 octaves too low.
+ * Anchors derived from the uPD7810 ROM calibration patch cross-referenced
+ * with the service manual's 248 Hz tuning target. Defaults (frqTrim=0,
+ * widthTrim=1) reproduce a perfectly calibrated unit.
  * ═══════════════════════════════════════════════════════════════════════
  *
  * DERIVATION
@@ -162,8 +159,8 @@ inline uint16_t calc_vcf_bend_amt(
  *     VCF Freq  = $B1    (bit 7 is a flag; value = $31 = 49 decimal)
  *     VCF Res   = $7F    (max)
  *     VCF KBD   = $7F    (max)
- *     VCF Env   = $00    (zero — no envelope modulation)
- *     VCF LFO   = $00    (zero — no LFO modulation)
+ *     VCF Env   = $00    (no envelope modulation)
+ *     VCF LFO   = $00    (no LFO modulation)
  *
  * The bit-7-as-flag interpretation was confirmed by systematic comparison
  * of all ROM test patches against the service manual: 127 out of 128
@@ -171,100 +168,88 @@ inline uint16_t calc_vcf_bend_amt(
  * patch 8 has Decay=$8A and Release=$0A — different raw bytes, same lower
  * 7 bits ($0A), and the service manual shows the same value (1.3) for both.
  *
- * The service manual calibration procedure (Juno-106, Section 4) states:
- *   - RES at max, KBD at max, play C4 → self-oscillation at 248 Hz
+ * The service manual calibration procedure (Section 4) states:
+ *   - RES max, KBD max, play C4 → self-oscillation at 248 Hz
  *   - Play C6 → self-oscillation at 992 Hz (verifies 2-octave KBD tracking)
  *
- * C4 is the firmware's KBD reference point (zero offset), so at C4 with
- * ENV=0 and LFO=0 the DAC sees only the VCF Freq slider contribution:
+ * C4 is the firmware's KBD reference point (zero offset). At C4 with
+ * ENV=0 and LFO=0, the DAC sees only the VCF Freq slider contribution:
  *
  *     dac = 49 × 128 = 6272
- *     248 = kBaseFreq × 2^(6272 / 1143)
- *     248 = kBaseFreq × 44.86
- *     kBaseFreq = 5.53
+ *     248 Hz = kBaseFreq × 2^(6272 / 1143)
+ *     kBaseFreq = 5.528
  *
- * The 992/248 ratio of exactly 4.0× (2 octaves over 24 semitones) confirms
- * the 1143 DAC counts per octave from the KBD tracking firmware.
+ * The 992/248 ratio of exactly 4.0× (2 octaves over 2286 DAC counts)
+ * confirms 1143 DAC per octave → kScale = ln(2)/1143.
  *
- * For a 4-pole cascaded integrator (IR3109), self-oscillation occurs at the
- * cutoff frequency: each pole contributes arctan(ω/ωc) = 45° at ω = ωc,
- * totaling 180° for the feedback path. So 248 Hz IS the cutoff, not a
- * resonance-shifted artifact.
+ * For a 4-pole cascaded integrator (IR3109), self-oscillation occurs at
+ * the cutoff frequency: each pole contributes arctan(ω/ωc) = 45° at
+ * ω = ωc, totaling 180° for the feedback path. So 248 Hz IS the cutoff,
+ * not a resonance-shifted artifact.
  *
  * SERVICE MANUAL ERRATUM
  *
  * The service manual states the VCF slider is at "6.3/10" for this test.
  * This is incorrect. The ROM patch loads $B1, whose actual parameter value
  * is $31 = 49 (bit 7 is a flag, not data). On the 0–127 scale this is
- * 49/127 = 3.9/10. The service manual writer likely interpreted the raw
- * byte $B1 without stripping the flag bit: $B1 >> 1 = $58 = 88, giving
- * 88/127 ≈ 6.9/10, which was then rounded or misread as 6.3. The ROM is
- * the ground truth.
+ * 49/127 = 3.9/10. The manual writer likely interpreted the raw byte $B1
+ * without stripping the flag bit: $B1 >> 1 = $58 = 88, giving 88/127 ≈
+ * 6.9/10, possibly rounded or misread as 6.3. The ROM is the ground truth.
  *
- * AUDIO CROSS-CHECKS
+ * CALIBRATION
  *
- * Spectral analysis of factory preset recordings from a real Juno-106 was
- * used to validate this derivation. Three patches with KBD=0 were selected
- * to isolate the static VCF frequency:
+ * The hardware procedure is iterative: adjust FREQ trimpot so C4 self-osc
+ * = 248 Hz, then WIDTH trimpot so C6 self-osc = 992 Hz; the two interact,
+ * so repeat until both within ±10 cents. This defines both anchors
+ * simultaneously. Unit-to-unit variation observed at DAC=16383 across
+ * voices (51202, 51238, 52251, 51848 Hz — 35 cents spread) is ultrasonic
+ * and does not affect musical tracking; any residual audible-range
+ * variation is absorbed by frqTrim / widthTrim settings.
  *
- *   A55 "Synth Bass II" (byte 43, ENV=47/Sus=9, noise+sub source)
- *     4-pole Butterworth fit at late sustain: ~135 Hz. Model predicts 156 Hz.
- *     Δ = -247 cents.
+ * COMPRESSION
  *
- *   A64 "Snare Drum" (byte 94, ENV=17/Sus=0, white noise source)
- *     Exponential fit to single-hit decay: fc∞ = 5917 Hz. Model: 8156 Hz.
- *     Δ = -555 cents.
+ * The IR3109 expo converter saturates at high bias currents (physical
+ * limit of the translinear cell). Modeled as:
  *
- *   B76 "Rolling Wah" (byte 60, ENV=0, LFO=max, pulse source)
- *     Spectral centroid geometric mean of LFO cycle: ~460 Hz. Model: 583 Hz.
- *     Δ = -409 cents.
+ *     f_out = f_raw / (1 + (f_raw/kCeil)^n)^(1/n)
  *
- * All three measurements fall below the ROM-derived curve by 250–550 cents
- * with a systematic trend (larger deviation at higher byte values). This is
- * consistent with the recorded unit's FREQ trimpot being set slightly below
- * the nominal calibration target — about a quarter-turn low, shifting the
- * entire curve down by roughly 1–2 dB. Unit-to-unit trimpot variation is
- * expected; the ROM calibration patch defines the design intent.
+ * With kCompN=6, the exp line stays within 0.01 cents of ideal through
+ * 10 kHz and within 1 cent through 20 kHz, then compresses sharply. Max
+ * at DAC=16383 lands at 51923 Hz, inside the observed voice-spread
+ * envelope. The hard knee is deliberate: self-oscillation tracking is
+ * only relevant in the audio range, and the real IR3109's earlier
+ * rolloff is not worth replicating at cost of audible-range accuracy.
  *
  * SIGNAL PATH
  *
  *   VCF Freq slider (0–127) ──┐
- *   KBD tracking               ├── summed in firmware ── DAC ── WIDTH trimpot
+ *   KBD tracking               ├── summed in firmware ── DAC ── × widthTrim
  *   ENV amount × env level     │                                    │
  *   LFO amount × LFO level  ──┘                               summing node
  *                                                                   │
- *                                                  FREQ trimpot ────┤
- *                                                  (DC bias from    │
- *                                                   ±15V divider)   │
+ *                                                      + frqTrim ───┤
+ *                                                    (DC bias from  │
+ *                                                     ±15V divider) │
  *                                                                   ▼
  *                                                   IR3109 expo converter
  *                                                                   │
  *                                                            VCF cutoff freq
  *
- * kBaseFreq encapsulates the FREQ trimpot bias and the IR3109 base current.
- * kScale comes from the ROM's KBD tracking calibration (1143 DAC counts per
- * octave). Both paths share the same DAC and analog output stage.
+ * frqTrim and widthTrim mirror the hardware FREQ and WIDTH trimpots.
  */
-inline float dacToHz(uint16_t dac)
+inline float dacToHz(uint16_t dac, float frqTrim = 0.0f, float widthTrim = 1.0f)
 {
-  // Hardware-fitted model, SN#193284 (lfrancis unit, 192 kHz capture).
-  // Fitted to 49 data points: zero-crossing measurements (bytes 0-72),
-  // FFT peak detection (bytes 80-120), spectrum analysis (bytes 121-127).
-  // RMS residual ~16 cents, max ~46 cents across full 0-16256 DAC range.
-  // Musical range (bytes 32-120, 70 Hz - 39 kHz): RMS ~15 cents.
-  //
-  // Generalized compression: f / (1 + (f/c)^n)^(1/n)
-  // Softer than tanh (n≈1.92 vs tanh's n→∞), matching the IR3109 expo
-  // converter's gradual saturation at high bias currents.
-  static constexpr float kBaseFreq = 6.1556f;
-  static constexpr float kScale    = 0.0005929967f;
-  static constexpr float kCeil     = 56504.1f;
-  static constexpr float kCompN    = 1.9303f;
+  static constexpr float kBaseFreq = 5.528477f;       // = 248 / 2^(6272/1143)
+  static constexpr float kScale    = 0.0006064280f;   // = ln(2) / 1143
+  static constexpr float kCeil     = 52000.0f;
+  static constexpr float kCompN    = 6.0f;
   static constexpr float kInvCompN = 1.f / kCompN;
 
-  float f = kBaseFreq * expf(static_cast<float>(dac) * kScale);
+  float cv_lin = static_cast<float>(dac) * widthTrim + frqTrim;
+  float f = kBaseFreq * expf(cv_lin * kScale);
   float r = f / kCeil;
   return f / powf(1.f + powf(r, kCompN), kInvCompN);
 }
+
 
 } // namespace kr106

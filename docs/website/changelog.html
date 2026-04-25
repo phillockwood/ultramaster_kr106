@@ -25,6 +25,23 @@
     <h2>Changelog <a href="index.html">&larr; Back to KR-106</a></h2>
 
     <details open>
+      <summary><span class="ver">2.5.12</span> DCO DRIFT, variance editor redesign, VCF refit, lower envelope latency</summary>
+      <ul>
+        <li>Global DCO DRIFT knob: static per-voice offset (sigma=12 cents at max) + slow walk from 3 incommensurate sub-Hz sines (0.07/0.13/0.31 Hz, 3 cents peak)</li>
+        <li>Variance editor: 5 columns; per-voice DCO FRQ replaced by global DRIFT; VCF FRQ display in real cents (1200/1143 DAC); VCF WIDTH in cents/oct</li>
+        <li>PWM baseline cleaned to ideal 50%/95%; hardware-unit deviation expressed entirely through the variance editor</li>
+        <li>VCF CV slew (522 us tau) models analog cutoff CV smoothing; suppresses zipper from per-sample envelope/LFO/DAC steps</li>
+        <li>Per-voice DAC phase staggering activated: VCF write lands ~125 us before VCA per slot, audible on fast filter-envelope patches</li>
+        <li>DAC phase tables rebased so slot 0 lands at tick rollover; cuts ~2 ms of latency off every tick-driven envelope/LFO update while preserving relative timing</li>
+        <li>dacToHz refit with zero-crossing data and generalized compression</li>
+        <li>VCF input compression disabled (kInputCompressAmount = 0); frqOver clamp unified to 0.85 across all OS modes; 1x-OS anti-aliasing fade across frq 0.7-0.9</li>
+        <li>PolyBLEP PW clamp loosened to [0.01, 0.99] to match wavetable; full editor PW range now reachable on both paths</li>
+        <li>Fix: oscMode (PolyBLEP/wavetable) was being silently overwritten by preset loads</li>
+        <li>Settings.json: new driftAmount key (default 0.25); legacy 60-entry voiceVariance arrays migrated automatically</li>
+      </ul>
+    </details>
+
+    <details open>
       <summary><span class="ver">2.5.7</span> Shared VCF downsampling, variable oversample, compiler optimization</summary>
       <ul>
         <li>Shared mix-bus decimator: per-voice upsample, single shared downsample (15-18% CPU reduction)</li>

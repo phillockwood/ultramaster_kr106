@@ -194,7 +194,7 @@ struct VCF
   }
 
   static constexpr float kOTAScaleBase = 0.35f;
-  static constexpr float kInputCompressAmount = 2.0f;
+  static constexpr float kInputCompressAmount = 0.f;
   
   // Circuit-derived constants for the BA662 OTA feedback path.
   //
@@ -245,6 +245,13 @@ struct VCF
       if (!mJ106Res) k = SoftClipK(k);
 
       // ---- Anti-aliasing at 1× OS ----
+      // At 1× there is no decimator after the VCF — the filter output
+      // goes straight to the 96 kHz mix bus. Any resonant peak above
+      // frq ≈ 0.7 (output Nyquist × 0.7) sits too close to Nyquist and
+      // folds audibly. Fade k to zero across frq 0.7→0.9 so even broad
+      // (non-self-oscillating) peaks collapse before reaching Nyquist.
+      // At 2× and 4× this isn't needed: the decimator's stopband catches
+      // near-Nyquist content on the way to the 96 kHz output.
       if (mOversample == 1 && frq > 0.7f)
       {
         float fade = std::max(1.f - (frq - 0.7f) / 0.2f, 0.f);
@@ -253,24 +260,32 @@ struct VCF
 
       mCacheK = k; // cached PRE-compression k
 
-      // ... frqOver / overMax / mCacheG block stays here, all the peak-pull
-      // compensation math, etc. (unchanged)
-      float overMax;
-      switch (mOversample)
-      {
-        case 1:
-          overMax = 0.85f;
-          break;
-        case 2:
-          overMax = 0.46f;
-          break;
-        default:
-          overMax = 0.85f;
-          break;
-      }
-      float frqOver = std::min(frq * mOverScale, overMax);
+      // frqOver clamp: 0.85 keeps g bounded for the TPT approximation.
+      // At 0.85, g = tan(0.85*π/2) ≈ 6.3, which is near the top of where
+      // the bilinear-prewarped integrators stay well-behaved. At 4× OS with
+      // max frq this maps to internal-Nyquist / 2 as intended; at 2× it
+      // maps to output-Nyquist, letting self-osc land in the decimator's
+      // transition/stopband region (matching HW where 52 kHz self-osc on
+      // B15 is attenuated by the output stage before reaching the ADC).
+      float frqOver = std::min(frq * mOverScale, 0.85f);
       mCacheG = tanf(frqOver * static_cast<float>(M_PI) * 0.5f);
 
+      // Peak-pull compensation — empirical fit from HW noise grid.
+      // A bilinear 4-pole TPT cascade intrinsically pulls its peak
+      // below nominal cutoff, but HW shows only a mild, roughly
+      // constant pull (~+150-300¢ across k=1..3.5, falling to 0 at
+      // k≥4). Theoretical linear-bilinear pull curve overcompensates
+      // at low k — likely because HW's BA662 loop has phase
+      // characteristics the ideal model doesn't capture. Fit is
+      // 3rd-order polynomial in k, calibrated directly to 10×10
+      // noise grid measurement.
+      //
+      // Edge fades: below k=1 the filter is in pure-rolloff regime
+      // with no resonant peak to compensate for, so logM fades to 0
+      // linearly. Above k=3.7, approaching self-oscillation, the
+      // natural pull collapses to 0 on HW (peak sits on dacToHz
+      // target at R=127); fade linearly to 0 by k=4.4 to avoid
+      // pushing self-osc pitch above target.
       float kFit = std::clamp(k, 0.f, 5.0f);
       float logM = 0.20646f + kFit * (-0.04140f + kFit * (0.00602f - kFit * 0.00127f));
       if (k < 1.0f) logM *= std::max(k, 0.f);
