@@ -144,26 +144,37 @@ public:
   //
   // The hardware has exactly 6 DAC "slots" for per-voice VCF/VCA writes.
   // Extended-polyphony modes (8, 10 voices) pair extra logical voices onto
-  // these same 6 physical slots — see kVoiceSlotMap below. This preserves
+  // these same 6 physical slots -- see kVoiceSlotMap below. This preserves
   // authentic modulation timing regardless of polyphony setting, at the cost
   // that paired voices share a DAC-write sample moment (their envelope,
   // pitch, and audio all remain independent).
+  //
+  // Times are rebased so slot 0's VCF write lands at tick rollover (offset
+  // 0 ms). On hardware the multiplexed DAC writes actually start ~2.2 ms
+  // into each tick, so this is technically inaccurate -- but the absolute
+  // lag is irrelevant to the sound while the *relative* spacing between
+  // writes is what produces the audible per-voice timing character.
+  // Rebasing preserves every relative timing exactly (per-slot stagger,
+  // VCF->VCA gap, end-of-tick ADC/bend gap on slot 5) while cutting
+  // ~2 ms of latency off every tick-driven envelope/LFO update.
+  // Net result: same hardware feel, faster note-on response.
   static constexpr float kTickPeriodMs = ADSR::kLoopPeriodMs;
+  static constexpr float kPhaseBaseMs  = 2.2055f; // subtracted from all phases
   static constexpr float kVcfPhaseTable[6] = {
-    2.2055f / kTickPeriodMs,  // slot 0
-    2.4929f / kTickPeriodMs,  // slot 1
-    2.7803f / kTickPeriodMs,  // slot 2
-    3.0677f / kTickPeriodMs,  // slot 3
-    3.3552f / kTickPeriodMs,  // slot 4
-    3.6426f / kTickPeriodMs,  // slot 5
+    (2.2055f - kPhaseBaseMs) / kTickPeriodMs,  // slot 0  (0.0000 ms)
+    (2.4929f - kPhaseBaseMs) / kTickPeriodMs,  // slot 1  (0.2874 ms)
+    (2.7803f - kPhaseBaseMs) / kTickPeriodMs,  // slot 2  (0.5748 ms)
+    (3.0677f - kPhaseBaseMs) / kTickPeriodMs,  // slot 3  (0.8622 ms)
+    (3.3552f - kPhaseBaseMs) / kTickPeriodMs,  // slot 4  (1.1497 ms)
+    (3.6426f - kPhaseBaseMs) / kTickPeriodMs,  // slot 5  (1.4371 ms)
   };
   static constexpr float kVcaPhaseTable[6] = {
-    2.3308f / kTickPeriodMs,  // slot 0
-    2.6182f / kTickPeriodMs,  // slot 1
-    2.9057f / kTickPeriodMs,  // slot 2
-    3.1931f / kTickPeriodMs,  // slot 3
-    3.4805f / kTickPeriodMs,  // slot 4
-    4.0451f / kTickPeriodMs,  // slot 5 (longer gap — ADC/bend block on hardware)
+    (2.3308f - kPhaseBaseMs) / kTickPeriodMs,  // slot 0  (0.1253 ms)
+    (2.6182f - kPhaseBaseMs) / kTickPeriodMs,  // slot 1  (0.4127 ms)
+    (2.9057f - kPhaseBaseMs) / kTickPeriodMs,  // slot 2  (0.7002 ms)
+    (3.1931f - kPhaseBaseMs) / kTickPeriodMs,  // slot 3  (0.9876 ms)
+    (3.4805f - kPhaseBaseMs) / kTickPeriodMs,  // slot 4  (1.2750 ms)
+    (4.0451f - kPhaseBaseMs) / kTickPeriodMs,  // slot 5  (1.8396 ms; longer gap -- ADC/bend block on hardware)
   };
 
   // Logical voice index -> physical DAC slot (0-5).
@@ -193,25 +204,33 @@ public:
   // Models resistor/capacitor/OTA matching tolerances in the hardware.
   float mVcfFreqOffset = 0.f; // J6/J60: log-freq offset (±5% cutoff)
   float mVcfFrqTrim    = 0.f; // J106: DC offset in DAC counts (±750), maps to dacToHz frqTrim
-  float mVcfWidthTrim  = 1.f; // J106: DAC scaling (0.895-1.105), maps to dacToHz widthTrim
-  float mPitchOffset   = 0.f; // octave offset (±3 cents)
+  float mVcfWidthTrim  = 1.f; // J106: DAC scaling, maps to dacToHz widthTrim (1 + cts/1200; ±100 ct → 0.917-1.083)
+  float mPitchOffset   = 0.f; // octave offset, computed from drift static + walk
   float mVcaGainScale  = 1.f; // linear gain (±0.5 dB)
   float mPwMinOffset   = 0.f; // ±0.02 around 0.50 (PW range low end)
   float mPwMaxOffset   = 0.f; // ±0.02 around 0.95 (PW range high end)
 
-  // Number of variance parameters per voice
-  static constexpr int kNumVarianceParams = 6;
+  // Drift state. mStaticOffsetUnit is a unit-normal sample (dimensionless),
+  // re-rolled only on tune-randomize. Static contribution scales with drift
+  // amount: mPitchOffset = mStaticOffsetUnit * drift * 12 cents + walk.
+  float mStaticOffsetUnit = 0.f;
+  float mWalkPhase[3]     = { 0.f, 0.f, 0.f };
+  float mWalkValue        = 0.f; // current walk in octaves
+  static constexpr float kWalkRateHz[3] = { 0.07f, 0.13f, 0.31f };
+
+  // Number of variance parameters per voice (DCO FRQ removed; static
+  // offset is now driven by the global DRIFT knob, not per-voice trims).
+  static constexpr int kNumVarianceParams = 5;
 
   // Get/set variance by index (for UI grid)
   float GetVariance(int idx) const
   {
     switch (idx) {
-      case 0: return mPitchOffset;
-      case 1: return mVcfFrqTrim;
-      case 2: return mVcfWidthTrim - 1.f; // store as offset from 1.0
-      case 3: return mVcaGainScale - 1.f;     // store as offset from 1.0
-      case 4: return mPwMinOffset;
-      case 5: return mPwMaxOffset;
+      case 0: return mVcfFrqTrim;
+      case 1: return (mVcfWidthTrim - 1.f) * 1200.f; // cents/oct (widthTrim = 1 + cts/1200)
+      case 2: return mVcaGainScale - 1.f;     // store as offset from 1.0
+      case 3: return mPwMinOffset;
+      case 4: return mPwMaxOffset;
       default: return 0.f;
     }
   }
@@ -219,34 +238,33 @@ public:
   void SetVariance(int idx, float v)
   {
     switch (idx) {
-      case 0: mPitchOffset     = v; break;
-      case 1: mVcfFrqTrim      = v; break;
-      case 2: mVcfWidthTrim   = 1.f + v; break;
-      case 3: mVcaGainScale    = 1.f + v; break;
-      case 4: mPwMinOffset     = v; break;
-      case 5: mPwMaxOffset     = v; break;
+      case 0: mVcfFrqTrim      = v; break;
+      case 1: mVcfWidthTrim   = 1.f + v / 1200.f; break; // v in cents/oct
+      case 2: mVcaGainScale    = 1.f + v; break;
+      case 3: mPwMinOffset     = v; break;
+      case 4: mPwMaxOffset     = v; break;
     }
   }
 
   // Variance parameter metadata for UI display
   struct VarianceInfo {
     const char* name;     // column header
-    float range;          // max absolute value
+    float range;          // max absolute value (also used by Out Of Tune randomize)
     float step;           // drag/arrow increment
     float displayScale;   // multiply raw value for display
     float displayOffset;  // add after scaling (for absolute display)
     const char* unit;     // display unit suffix
+    float humanRange;     // max absolute value for Human Tune randomize
   };
 
   static const VarianceInfo& GetVarianceInfo(int idx)
   {
     static const VarianceInfo info[kNumVarianceParams] = {
-      { "DCO FRQ", 0.025f, 1.f/1200.f, 1200.f,  0.f, "cts" }, // ±30 cts, step 1 ct
-      { "VCF FRQ", 750.f,  10.f,           1.f,  0.f, ""    }, // ±750 DAC counts
-      { "VCF WID", 0.105f, 0.005f,      100.f,  0.f, "pct" }, // ±10.5% width
-      { "VCA",     0.12f,  0.01f,       100.f,  0.f, "pct" }, // ±12% gain
-      { "PW Lo",   0.05f,  0.01f,       100.f, 50.f, "pct" }, // 48–52% (base 50)
-      { "PW Hi",   0.05f,  0.01f,       100.f, 95.f, "pct" }, // 93–97% (base 95)
+      { "VCF FRQ",   750.f,  1.f, 1200.f/1143.f,  0.f, "cts",     10.f          }, // ±750 DAC counts (1143 DAC/oct -> ±787 cts displayed)
+      { "VCF WIDTH", 100.f,  1.f,           1.f,  0.f, "cts/oct", 10.f          }, // ±100 cts/oct max, Human ±10
+      { "VCA",       0.12f,  0.01f,       100.f,  0.f, "pct",     0.12f * 0.2f  }, // ±12% gain
+      { "PW Lo",     0.05f,  0.01f,       100.f, 50.f, "pct",     0.02f         }, // Full ±5 (45-55), Human ±2 (48-52)
+      { "PW Hi",     0.05f,  0.01f,       100.f, 95.f, "pct",     0.02f         }, // Full ±5 (90-100), Human ±2 (93-97)
     };
     return info[idx];
   }
@@ -270,13 +288,60 @@ public:
       return static_cast<float>(seed) / static_cast<float>(0xFFFFFFFF) * 2.f - 1.f;
     };
 
-    mVcfFreqOffset   = rng() * 0.05f;        // J6/J60: ±5% filter cutoff
-    mVcfFrqTrim      = rng() * 50.f;         // J106: ±50 DAC counts frq offset
-    mVcfWidthTrim    = 1.f + rng() * 0.01f;  // J106: ±1% width scaling
-    mPitchOffset     = rng() * 3.f / 1200.f; // ±3 cents (in octaves)
-    mVcaGainScale    = 1.f + rng() * 0.06f;  // ±0.5 dB VCA gain
-    mPwMinOffset     = rng() * 0.02f;        // PW min: 48–52%
-    mPwMaxOffset     = rng() * 0.02f;        // PW max: 93–97%
+    // Magnitudes match VarianceInfo::humanRange so a fresh install (no
+    // voiceVariance in settings.json) feels like HUMAN TUNE was clicked.
+    mVcfFreqOffset   = rng() * (10.f / 1200.f); // J6/J60: ±10 ct log-freq
+    mVcfFrqTrim      = rng() * 10.f;            // J106: ±10 DAC counts
+    mVcfWidthTrim    = 1.f + rng() * (10.f / 1200.f); // ±10 cts/oct
+    mVcaGainScale    = 1.f + rng() * 0.024f;    // ±2.4% gain
+    mPwMinOffset     = rng() * 0.02f;           // PW min: 48-52%
+    mPwMaxOffset     = rng() * 0.02f;           // PW max: 93-97%
+
+    // Drift state: deterministic gaussian-ish unit sample (sum of 3 uniforms
+    // U(-1,1) gives σ = 1 exactly) plus randomized walk phases.
+    mStaticOffsetUnit = rng() + rng() + rng();
+    for (int i = 0; i < 3; i++)
+      mWalkPhase[i] = (rng() + 1.f) * static_cast<float>(M_PI); // [0, 2π)
+    mWalkValue = 0.f;
+    mPitchOffset = 0.f; // set when SetDriftAmount() is called
+  }
+
+  // Apply current drift amount to this voice (recomputes the static
+  // contribution from the existing unit sample; pass reroll=true to
+  // generate a fresh unit sample first, e.g. on tune-randomize).
+  void SetDriftAmount(float drift, bool reroll, uint32_t sessionSalt)
+  {
+    if (reroll)
+    {
+      uint32_t seed = static_cast<uint32_t>(mVoiceIndex) * 2654435761u
+                    + sessionSalt + 0x44726974u;
+      auto rng = [&seed]() -> float {
+        seed = seed * 196314165u + 907633515u;
+        return static_cast<float>(seed) / static_cast<float>(0xFFFFFFFF) * 2.f - 1.f;
+      };
+      mStaticOffsetUnit = rng() + rng() + rng();
+    }
+    // 12 cents at drift=1.0, scaled linearly. Value is in octaves.
+    float staticOct = mStaticOffsetUnit * drift * 12.f / 1200.f;
+    mPitchOffset = staticOct + mWalkValue;
+  }
+
+  // Advance the walk LFOs by dtSeconds and update mPitchOffset. Called
+  // once per audio buffer.
+  void UpdateDriftWalk(float drift, float dtSeconds)
+  {
+    constexpr float kTwoPi = 2.f * static_cast<float>(M_PI);
+    float walkSum = 0.f;
+    for (int i = 0; i < 3; i++)
+    {
+      mWalkPhase[i] += kTwoPi * kWalkRateHz[i] * dtSeconds;
+      if (mWalkPhase[i] > kTwoPi) mWalkPhase[i] -= kTwoPi;
+      walkSum += sinf(mWalkPhase[i]);
+    }
+    // 3 sines sum to ±3 peak; normalize to ±1, scale to ±3 cents at drift=1.
+    mWalkValue = (walkSum * (1.f / 3.f)) * drift * 3.f / 1200.f;
+    float staticOct = mStaticOffsetUnit * drift * 12.f / 1200.f;
+    mPitchOffset = staticOct + mWalkValue;
   }
 
   // DCO LFO depth calibrated from Juno-6 strobe tuner measurements
@@ -1065,11 +1130,12 @@ public:
         default:
           pw = mDcoPwm;
       }
-      // Per-voice PW calibration variance (hardware component tolerance)
-      // Linear PW mapping from 106-point hardware duty cycle sweep
-      // (pwm_test, lfrancis unit at 192 kHz). Max error < 0.1%.
-      float pwMin = 0.4949f + mPwMinOffset;
-      float pwMax = 0.9724f + mPwMaxOffset;
+      // Per-voice PW calibration variance (hardware component tolerance).
+      // Baseline is the ideal 50%-95% range; mPwMinOffset/mPwMaxOffset
+      // encode all deviation, including the lfrancis unit's measured offset
+      // (~-0.51% min, ~+2.24% max from 192 kHz duty-cycle sweep).
+      float pwMin = 0.5f + mPwMinOffset;
+      float pwMax = 0.95f + mPwMaxOffset;
       pw = pwMin + pw * (pwMax - pwMin);
 
 

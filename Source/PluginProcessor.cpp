@@ -1553,15 +1553,42 @@ void KR106AudioProcessor::loadGlobalSettings()
     }
   }
 
-  // Load per-voice variance values (if saved)
+  // Load per-voice variance values (if saved). Pre-drift schema had 6 entries
+  // per voice with DCO FRQ at index 0; new schema has 5 (DCO FRQ replaced by
+  // global DRIFT). Saved arrays always pack all 10 voices, so detect legacy
+  // by exact size (60 = 10*6) vs new (50 = 10*5). Old DCO FRQ values are
+  // discarded; the user's configured DRIFT knob takes over.
+  //
+  // VCF WIDTH unit change: legacy storage was a fractional widthTrim offset
+  // (e.g. 0.05 = +5%); new storage is cents/oct. Convert with *1200 so the
+  // post-SetVariance widthTrim matches the legacy intent.
   auto variance = KR106PresetManager::getSetting("voiceVariance");
   if (variance.isArray())
   {
     auto* arr = variance.getArray();
-    int idx = 0;
-    for (int v = 0; v < 10 && idx < arr->size(); v++)
-      for (int p = 0; p < 6 && idx < arr->size(); p++, idx++)
-        mDSP.GetVoice(v)->SetVariance(p, static_cast<float>((double)(*arr)[idx]));
+    int total = arr->size();
+    bool legacy = (total == 60);
+    int stride = legacy ? 6 : 5;
+    int skip   = legacy ? 1 : 0;
+    int newStride = kr106::Voice<float>::kNumVarianceParams;
+    for (int v = 0; v < 10; v++)
+    {
+      int base = v * stride;
+      if (base + stride > total) break;
+      for (int p = 0; p < newStride; p++)
+      {
+        float val = static_cast<float>((double)(*arr)[base + skip + p]);
+        if (legacy && p == 1) val *= 1200.f; // VCF WIDTH: fraction -> cts/oct
+        mDSP.GetVoice(v)->SetVariance(p, val);
+      }
+    }
+  }
+
+  // Load drift amount (default to 0.25 = "recently calibrated"). Apply to
+  // all voices so static offsets are scaled correctly on construction.
+  {
+    auto drift = KR106PresetManager::getSetting("driftAmount", 0.25);
+    mDSP.SetDriftAmount(static_cast<float>((double)drift));
   }
 
   // Load noise/drive levels (variance editor)
@@ -1636,11 +1663,13 @@ void KR106AudioProcessor::saveGlobalSettings()
   KR106PresetManager::saveSetting("mainsNoiseMul", static_cast<double>(mDSP.mMainsMul));
   KR106PresetManager::saveSetting("clockNoiseMul", static_cast<double>(mDSP.mChorus.mClockMul));
   KR106PresetManager::saveSetting("bbdDriveUser", static_cast<double>(mDSP.mChorus.mBbdDriveUser));
+  KR106PresetManager::saveSetting("driftAmount", static_cast<double>(mDSP.mDriftAmount));
 
-  // Save per-voice variance as flat array [v0p0, v0p1, ..., v9p5]
+  // Save per-voice variance as flat array [v0p0..v0p4, v1p0..v1p4, ...].
+  // 5 params per voice (DCO FRQ replaced by global DRIFT).
   juce::Array<juce::var> varArr;
   for (int v = 0; v < 10; v++)
-    for (int p = 0; p < 6; p++)
+    for (int p = 0; p < kr106::Voice<float>::kNumVarianceParams; p++)
       varArr.add(static_cast<double>(mDSP.GetVoice(v)->GetVariance(p)));
   KR106PresetManager::saveSetting("voiceVariance", varArr);
 

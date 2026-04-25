@@ -13,7 +13,7 @@ class KR106VarianceSheet : public juce::Component
 {
 public:
     static constexpr int kMaxVoices = 10;
-    static constexpr int kNumParams = 6;
+    static constexpr int kNumParams = 5;
     // Layout: title, noise row (analog + chorus on one line), header, 10 voices
     static constexpr int kFirstVoiceRow = 3; // title + noise + header
     static constexpr int kTotalRows = kFirstVoiceRow + kMaxVoices;
@@ -32,6 +32,7 @@ public:
             mMainsNoiseKnob = mulToKnob(mProcessor->mDSP.mMainsMul);
             mClockNoiseKnob = mProcessor->mDSP.mChorus.mClockMul; // linear 0-1
             mBbdDriveKnob = mProcessor->mDSP.mChorus.mBbdDriveUser / 100.f;
+            mDriftKnob = mProcessor->mDSP.mDriftAmount;
             // Note: chorus mAnalogMul is always kept in sync with mNoiseFloorMul
         }
     }
@@ -64,10 +65,10 @@ public:
         g.setColour(bright());
         g.drawSingleLineText("COMPONENT VARIANCE", 4, kRowH - 2);
 
-        mTunePoorlyRect  = { colW7 * 3, 0, colW7, kRowH };
-        mTuneLazyRect    = { colW7 * 4, 0, colW7, kRowH };
-        mTunePerfectRect = { colW7 * 5, 0, colW7, kRowH };
-        mCloseRect       = { colW7 * 6, 0, w - colW7 * 6, kRowH };
+        mTunePoorlyRect  = { colW7 * 2, 0, colW7, kRowH };
+        mTuneLazyRect    = { colW7 * 3, 0, colW7, kRowH };
+        mTunePerfectRect = { colW7 * 4, 0, colW7, kRowH };
+        mCloseRect       = { colW7 * 5, 0, w - colW7 * 5, kRowH };
 
         auto drawBtn = [&](juce::Rectangle<int>& r, const char* label, int hoverId) {
             if (mHoverRow == hoverId)
@@ -110,10 +111,11 @@ public:
                                      juce::Justification::right);
             };
             int colW7 = w / kTotalCols;
-            paintNoiseCell(-5, 0,            colW7,  "ANALOG",    mAnalogNoiseKnob);
-            paintNoiseCell(-6, colW7,        colW7,  "MAINS",     mMainsNoiseKnob);
-            paintNoiseCell(-7, colW7 * 2,    colW7,  "CHORUS",    mClockNoiseKnob);
-            paintNoiseCell(-8, colW7 * 3,    colW7,  "BBD DRIVE", mBbdDriveKnob);
+            paintNoiseCell(-10, 0,         colW7, "DCO DRIFT",    mDriftKnob);
+            paintNoiseCell(-5,  colW7,     colW7, "FLOOR NS",  mAnalogNoiseKnob);
+            paintNoiseCell(-6,  colW7 * 2, colW7, "MAINS NS",  mMainsNoiseKnob);
+            paintNoiseCell(-7,  colW7 * 3, colW7, "CHORUS NS", mClockNoiseKnob);
+            paintNoiseCell(-8,  colW7 * 4, colW7, "BBD DRIVE",    mBbdDriveKnob);
         }
 
         // Header row (bright text on dark bg)
@@ -219,7 +221,7 @@ public:
         if (mTunePerfectRect.contains(e.getPosition())) { tunePerfect();       return; }
 
         auto [row, col] = hitTest(e.getPosition());
-        if (row <= -5 && row >= -8)
+        if (isNoiseKnob(row))
         {
             mSelectedRow = row;
             mSelectedCol = 0;
@@ -243,7 +245,7 @@ public:
 
     void mouseDrag(const juce::MouseEvent& e) override
     {
-        if (mSelectedRow <= -5 && mSelectedRow >= -8)
+        if (isNoiseKnob(mSelectedRow))
         {
             float delta = (mDragStartY - e.y) * (1.f / 80.f);
             noiseKnob(mSelectedRow) = std::clamp(mDragStartValue + delta, 0.f, 1.f);
@@ -253,7 +255,7 @@ public:
         }
         if (mSelectedRow < 0) return;
         auto info = kr106::Voice<float>::GetVarianceInfo(mSelectedCol);
-        float delta = (mDragStartY - e.y) * (info.range / 50.f);
+        float delta = (mDragStartY - e.y) * info.step;
         float newVal = std::clamp(mDragStartValue + delta, -info.range, info.range);
         mValues[mSelectedRow][mSelectedCol] = newVal;
         applyToVoice(mSelectedRow, mSelectedCol);
@@ -418,6 +420,7 @@ private:
         mMainsNoiseKnob = 0.f;
         mClockNoiseKnob = 0.f;
         mBbdDriveKnob = 0.f;
+        mDriftKnob = 0.f;
         applyNoise();
         repaint();
     }
@@ -436,7 +439,10 @@ private:
             for (int p = 0; p < kNumParams; p++)
             {
                 auto info = kr106::Voice<float>::GetVarianceInfo(p);
-                mValues[v][p] = rng() * info.range * scale;
+                // Human Tune uses humanRange; Out Of Tune uses 2x humanRange.
+                // info.range is the user-editable manual cap, not used here.
+                float r = (scale > 0.5f) ? (info.humanRange * 2.f) : info.humanRange;
+                mValues[v][p] = rng() * r;
             }
             for (int p = 0; p < kNumParams; p++)
                 applyToVoice(v, p);
@@ -447,7 +453,14 @@ private:
         mMainsNoiseKnob = noiseLevel;
         mClockNoiseKnob = noiseLevel;
         mBbdDriveKnob = noiseLevel;
+        // Drift: Human Tune = 0.25 (recently calibrated), Out of Tune = 0.75 (drifted classic).
+        mDriftKnob = (scale > 0.5f) ? 0.75f : 0.25f;
         applyNoise();
+        // Reroll per-voice static-offset units so each tune-randomize click
+        // creates a fresh "hardware unit" feel rather than reshuffling the
+        // same scaled values.
+        if (mProcessor)
+            mProcessor->mDSP.RerollDriftUnits(baseSeed);
         repaint();
     }
 
@@ -462,15 +475,16 @@ private:
             if (mTunePerfectRect.contains(pos)) return { -4, -1 };
         }
 
-        // Noise/drive row: y = 1*kRowH to 2*kRowH, 7 columns (4 used)
+        // Noise/drive row: y = 1*kRowH to 2*kRowH, 6 columns (5 used)
         if (pos.y >= kRowH && pos.y < 2 * kRowH)
         {
             int colW7 = getWidth() / kTotalCols;
             int col = pos.x / colW7;
-            if (col == 0) return { -5, 0 };
-            if (col == 1) return { -6, 0 };
-            if (col == 2) return { -7, 0 };
-            if (col == 3) return { -8, 0 };
+            if (col == 0) return { -10, 0 };
+            if (col == 1) return { -5,  0 };
+            if (col == 2) return { -6,  0 };
+            if (col == 3) return { -7,  0 };
+            if (col == 4) return { -8,  0 };
             return { -1, -1 }; // empty columns
         }
 
@@ -497,11 +511,17 @@ private:
         return (log2f(mul) / 2.f + 1.f) * 0.5f; // inverse of knobToMul
     }
 
+    static bool isNoiseKnob(int hitId)
+    {
+        return hitId == -5 || hitId == -6 || hitId == -7 || hitId == -8 || hitId == -10;
+    }
+
     float& noiseKnob(int hitId)
     {
-        if (hitId == -6) return mMainsNoiseKnob;
-        if (hitId == -7) return mClockNoiseKnob;
-        if (hitId == -8) return mBbdDriveKnob;
+        if (hitId == -6)  return mMainsNoiseKnob;
+        if (hitId == -7)  return mClockNoiseKnob;
+        if (hitId == -8)  return mBbdDriveKnob;
+        if (hitId == -10) return mDriftKnob;
         return mAnalogNoiseKnob; // -5
     }
 
@@ -518,6 +538,7 @@ private:
         float userVal = mBbdDriveKnob * 100.f;
         mProcessor->mDSP.mChorus.mBbdDriveUser = userVal;
         mProcessor->mDSP.mChorus.updateBbdDrive();
+        mProcessor->mDSP.SetDriftAmount(mDriftKnob);
     }
 
     void dismiss()
@@ -533,6 +554,7 @@ private:
     float mMainsNoiseKnob = 0.5f;
     float mClockNoiseKnob = 0.5f;
     float mBbdDriveKnob = 0.5f;   // 0..1, 0.5 = default (50%)
+    float mDriftKnob = 0.25f;     // 0..1, 0 = robot, 1 = uncalibrated
     float mValues[kMaxVoices][kNumParams] = {};
     int mHoverRow = -1, mHoverCol = -1;
     int mSelectedRow = -1, mSelectedCol = -1;

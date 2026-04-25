@@ -34,6 +34,11 @@ public:
     void setSnapCenter(bool snap) { mSnapCenter = snap; }
     void setGearing(float g) { mGearing = g; }
 
+    // Optional callback fired on mouse-up at the end of a drag (after the
+    // gesture is finalized). Use for side-effects that should happen once
+    // per gesture rather than on every drag-pixel value change.
+    std::function<void()> onDragEnd;
+
     void paint(juce::Graphics& g) override
     {
         float val = mParam ? mParam->getValue() : 0.f;
@@ -242,6 +247,8 @@ public:
         auto screenPos = localPointToGlobal(juce::Point<int>(getWidth() / 2, getHeight() / 2));
         juce::Desktop::getInstance().getMainMouseSource().setScreenPosition(screenPos.toFloat());
         if (isAppleHost()) mCursorDirty = true;
+
+        if (onDragEnd) onDragEnd();
     }
 
     void updateCCLine()

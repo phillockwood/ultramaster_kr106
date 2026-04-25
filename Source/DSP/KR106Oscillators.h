@@ -204,15 +204,15 @@ struct Oscillators {
     // Skipping the whole block when the gain has decayed below kGainEps
     // and pulseOn is false avoids all of that.
     //
-    // Hardware maxes at ~97% duty, clamping effPW to [0.03, 0.97]
-    // leaves comfortable headroom for the 4-sample polyBLEP window
-    // without a frequency-dependent squeeze. If the two BLEP windows
-    // overlap at high notes with narrow PW, the corrections sum
-    // correctly (additive).
+    // Clamp effPW to [0.01, 0.99] so the variance editor's full PW range
+    // (45-55% / 90-100%) is reachable on this path. Matches the wavetable
+    // oscillator's clamp. At high notes with extreme PW the two BLEP
+    // windows overlap, but the corrections sum additively and produce no
+    // artifacts beyond what the bandlimited spectrum allows.
     if (pulseOn || (mPulseGain > kGainEps)) {
       float effPW = pulseWidth;
       if (mPulseInvert) effPW = 1.f - effPW; // J106: inverted duty cycle
-      effPW = std::clamp(effPW, 0.03f, 0.97f);
+      effPW = std::clamp(effPW, 0.01f, 0.99f);
       float pulse = (mPos < effPW) ? -1.f : 1.f;
       pulse -= (1.f - 2.f * effPW);   // DC correction: subtract the mean
       pulse -= blepAtReset;              // falling edge at reset (shared)

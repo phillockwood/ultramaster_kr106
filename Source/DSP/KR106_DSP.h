@@ -201,6 +201,30 @@ public:
     for (auto& v : mVoices) func(*v);
   }
 
+  // Set the global drift amount and apply it to all voices (rescaling
+  // their existing static-offset units, no reroll).
+  void SetDriftAmount(float drift)
+  {
+    mDriftAmount = std::clamp(drift, 0.f, 1.f);
+    uint32_t salt = mDriftSessionSalt;
+    float d = mDriftAmount;
+    ForEachVoice([d, salt](kr106::Voice<T>& v) {
+      v.SetDriftAmount(d, false, salt);
+    });
+  }
+
+  // Reroll every voice's static-offset unit (new "hardware unit" feel)
+  // and reapply the current drift amount. Called by tune-randomize.
+  void RerollDriftUnits(uint32_t newSalt)
+  {
+    mDriftSessionSalt = newSalt;
+    float d = mDriftAmount;
+    uint32_t s = newSalt;
+    ForEachVoice([d, s](kr106::Voice<T>& v) {
+      v.SetDriftAmount(d, true, s);
+    });
+  }
+
   static double MidiToPitch(int note) { return (note - 69) / 12.0; }
 
   void TriggerUnisonVoices(int note, int velocity)
@@ -489,6 +513,13 @@ public:
     mArp.Process(nFrames,
       [this](int note, int offset) { SendToSynth(note, true,  127, offset); },
       [this](int note, int offset) { SendToSynth(note, false, 0,   offset); });
+
+    // Drift walk update (per buffer is plenty for sub-Hz LFOs).
+    {
+      float dt = static_cast<float>(nFrames) / mSampleRate;
+      float d = mDriftAmount;
+      ForEachVoice([d, dt](kr106::Voice<T>& v) { v.UpdateDriftWalk(d, dt); });
+    }
 
     // Voices accumulate into the Nx mono mix bus.
     //
@@ -833,6 +864,11 @@ public:
   kr106::RailRipple mFloorRipple;
   float mNoiseFloorMul = 1.f;  // user-adjustable analog broadband multiplier (variance sheet)
   float mMainsMul = 1.f;      // user-adjustable mains ripple multiplier (variance sheet)
+
+  // Unison drift: 0 = perfect (robot), 1 = old/cold/uncalibrated.
+  // Static σ scales to ±12 cents at drift=1; walk amplitude to ±3 cents.
+  float mDriftAmount = 0.25f;
+  uint32_t mDriftSessionSalt = 0; // changed on tune-randomize to reroll units
   std::vector<T> mSyncBuffer;
   float mScopeSyncPhase = 0.f;
   bool mScopeSyncSub = false;
