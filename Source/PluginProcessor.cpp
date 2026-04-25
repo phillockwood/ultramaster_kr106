@@ -41,7 +41,8 @@ static bool isLivePerformanceParam(int idx)
          idx == kBenderLfo || idx == kPower ||
          idx == kAdsrMode ||  // mode selects the bank, not a preset parameter
          idx == kArpQuantize || idx == kLfoQuantize ||
-         (idx >= kSettingVoices && idx <= kSettingMidiSysEx);
+         (idx >= kSettingVoices && idx <= kSettingMidiSysEx) ||
+         idx == kSettingOscMode;
 }
 
 static bool sExcludeMask[kNumParams] = {};

@@ -94,6 +94,12 @@ public:
   float mVcaSlew      = 0.f;
   float mVcaSlewCoeff = 0.f;
 
+  // VCF CV slew: one-pole RC on the cutoff CV, models analog smoothing on
+  // the IR3109/A1QH80017A control voltage. Slightly faster than the VCA
+  // slew. Suppresses zipper from per-sample envelope/LFO/DAC steps.
+  float mVcfSlew      = 0.f;
+  float mVcfSlewCoeff = 0.f;
+
   // Per-voice upsampler pair: 1× → 2× → 4×.
   // Oscillator runs at base rate (cheap); its output is upsampled to
   // 4× before feeding into the VCF. The mix bus then sums all voices
@@ -185,7 +191,9 @@ public:
 
   // Per-voice component tolerance offsets (fixed at construction).
   // Models resistor/capacitor/OTA matching tolerances in the hardware.
-  float mVcfFreqOffset = 0.f; // log-freq offset (±5% cutoff)
+  float mVcfFreqOffset = 0.f; // J6/J60: log-freq offset (±5% cutoff)
+  float mVcfFrqTrim    = 0.f; // J106: DC offset in DAC counts (±750), maps to dacToHz frqTrim
+  float mVcfWidthTrim  = 1.f; // J106: DAC scaling (0.895-1.105), maps to dacToHz widthTrim
   float mPitchOffset   = 0.f; // octave offset (±3 cents)
   float mVcaGainScale  = 1.f; // linear gain (±0.5 dB)
   float mPwMinOffset   = 0.f; // ±0.02 around 0.50 (PW range low end)
@@ -198,9 +206,9 @@ public:
   float GetVariance(int idx) const
   {
     switch (idx) {
-      case 0: return mVcfFreqOffset;
-      case 1: return mPitchOffset;
-      case 2: return mADSR.mTimeScale - 1.f; // store as offset from 1.0
+      case 0: return mPitchOffset;
+      case 1: return mVcfFrqTrim;
+      case 2: return mVcfWidthTrim - 1.f; // store as offset from 1.0
       case 3: return mVcaGainScale - 1.f;     // store as offset from 1.0
       case 4: return mPwMinOffset;
       case 5: return mPwMaxOffset;
@@ -211,9 +219,9 @@ public:
   void SetVariance(int idx, float v)
   {
     switch (idx) {
-      case 0: mVcfFreqOffset   = v; break;
-      case 1: mPitchOffset     = v; break;
-      case 2: mADSR.mTimeScale = 1.f + v; break;
+      case 0: mPitchOffset     = v; break;
+      case 1: mVcfFrqTrim      = v; break;
+      case 2: mVcfWidthTrim   = 1.f + v; break;
       case 3: mVcaGainScale    = 1.f + v; break;
       case 4: mPwMinOffset     = v; break;
       case 5: mPwMaxOffset     = v; break;
@@ -233,9 +241,9 @@ public:
   static const VarianceInfo& GetVarianceInfo(int idx)
   {
     static const VarianceInfo info[kNumVarianceParams] = {
-      { "VCF FRQ", 0.10f,  0.01f,        100.f,  0.f, "cts" }, // ±10 cts cutoff
       { "DCO FRQ", 0.025f, 1.f/1200.f, 1200.f,  0.f, "cts" }, // ±30 cts, step 1 ct
-      { "ADSR",    0.15f,  0.01f,       100.f,  0.f, "pct" }, // ±15% timing
+      { "VCF FRQ", 750.f,  10.f,           1.f,  0.f, ""    }, // ±750 DAC counts
+      { "VCF WID", 0.105f, 0.005f,      100.f,  0.f, "pct" }, // ±10.5% width
       { "VCA",     0.12f,  0.01f,       100.f,  0.f, "pct" }, // ±12% gain
       { "PW Lo",   0.05f,  0.01f,       100.f, 50.f, "pct" }, // 48–52% (base 50)
       { "PW Hi",   0.05f,  0.01f,       100.f, 95.f, "pct" }, // 93–97% (base 95)
@@ -262,9 +270,10 @@ public:
       return static_cast<float>(seed) / static_cast<float>(0xFFFFFFFF) * 2.f - 1.f;
     };
 
-    mVcfFreqOffset   = rng() * 0.05f;        // ±5% filter cutoff
+    mVcfFreqOffset   = rng() * 0.05f;        // J6/J60: ±5% filter cutoff
+    mVcfFrqTrim      = rng() * 50.f;         // J106: ±50 DAC counts frq offset
+    mVcfWidthTrim    = 1.f + rng() * 0.01f;  // J106: ±1% width scaling
     mPitchOffset     = rng() * 3.f / 1200.f; // ±3 cents (in octaves)
-    mADSR.mTimeScale = 1.f + rng() * 0.08f;  // ±8% envelope timing
     mVcaGainScale    = 1.f + rng() * 0.06f;  // ±0.5 dB VCA gain
     mPwMinOffset     = rng() * 0.02f;        // PW min: 48–52%
     mPwMaxOffset     = rng() * 0.02f;        // PW max: 93–97%
@@ -920,8 +929,21 @@ public:
     }
     mOsc.Init(mSampleRate);
 
-    static constexpr float kVcaSlewTau = 0.00058f; // ~0.58ms, matches hardware
+    // CV path low-pass smoothing, derived from hardware components:
+    //   R_thev = R106 (10K) ∥ R105 (22K) = 6.875K
+    //   τ = R_thev × C58 (0.1µF) = 687 µs
+    //   10–90% rise = 2.197τ ≈ 1.51 ms
+    static constexpr float kVcaSlewTau = 0.000687f; // 687 µs, 1.51ms 10-90% rise
     mVcaSlewCoeff = 1.f - expf(-1.f / (kVcaSlewTau * mSampleRate));
+
+    // CV path low-pass smoothing, derived from hardware components:
+    //   R_thev = (VR28 (0–5K) + R113 (10K)) ∥ R110 (8.2K + 560Ω tempco)
+    //          = 5.22K at calibrated WIDTH (VR28 ≈ 2.93K)
+    //   τ = R_thev × C61 (0.1µF) = 522 µs
+    //   10–90% rise = 2.197τ ≈ 1.15 ms
+    //   Range across WIDTH: 1.03–1.22 ms (ignored — sub-audibility)
+    static constexpr float kVcfSlewTau = 0.000522f; // 522 µs, 1.15ms 10-90% rise
+    mVcfSlewCoeff = 1.f - expf(-1.f / (kVcfSlewTau * mSampleRate));
 
     // Precomputed constants for VCF frequency calculation.
     // VCF modulation works in log-frequency space; these convert
@@ -992,19 +1014,31 @@ public:
       }
       else
       {
-        // J106: firmware tick computes new ADSR + VCF DAC values.
-        // On hardware the multiplexed DAC writes each channel at a
-        // different point within the tick period (see kVcfPhaseTable /
-        // kVcaPhaseTable for the per-voice offsets). Currently all CVs
-        // latch simultaneously at tick time -- the phase infrastructure
-        // is preserved for future stagger experiments but inactive.
+        // J106: firmware tick computes new ADSR + VCF DAC values, then the
+        // multiplexed DAC writes each channel at a different point within
+        // the tick period. Per-voice VCF/VCA offsets come from kVcfPhaseTable
+        // and kVcaPhaseTable; the VCF write lands ~125 µs before the VCA
+        // write per slot. With the analog CV slews modeled (mVcfSlew /
+        // mVcaSlew), this head-start lets the cutoff begin moving before
+        // the gain does -- audible on fast filter-envelope patches.
         mFwTickAccum += mFwTickStep;
         if (mFwTickAccum >= 1.f)
         {
           mFwTickAccum -= 1.f;
           FirmwareTick(lfoRaw);
+          mVcfDacUpdated = false;
+          mVcaDacUpdated = false;
+        }
+
+        if (!mVcfDacUpdated && mFwTickAccum >= mVcfPhase)
+        {
           mVcfDacNext = mVcfDacPending;
+          mVcfDacUpdated = true;
+        }
+        if (!mVcaDacUpdated && mFwTickAccum >= mVcaPhase)
+        {
           mFwEnvNext = mFwEnvPending;
+          mVcaDacUpdated = true;
         }
 
         env = mFwEnvNext;
@@ -1080,9 +1114,13 @@ public:
       }
       else
       {
-        float vcfHz = kr106::dacToHz(std::min(mVcfDacNext, static_cast<uint16_t>(16256)));
+        float vcfHz = kr106::dacToHz(mVcfDacNext, mVcfFrqTrim, mVcfWidthTrim);
         vcfCPS = vcfHz * mInvNyq;
       }
+
+      // --- VCF CV slew (one-pole RC on cutoff, models analog CV smoothing) ---
+      mVcfSlew += mVcfSlewCoeff * (vcfCPS - mVcfSlew);
+      vcfCPS = mVcfSlew;
 
       // --- VCF coefficient update (control rate, ~once per base sample) ---
       // This is where tanf, expf, powf etc. live. Running it 1× instead of
@@ -1209,7 +1247,7 @@ public:
         FirmwareTickIdleVcfJ106(lfoRaw);
       }
 
-      float vcfHz = kr106::dacToHz(std::min(mVcfDacNext, static_cast<uint16_t>(16256)));
+      float vcfHz = kr106::dacToHz(mVcfDacNext, mVcfFrqTrim, mVcfWidthTrim);
       float vcfCPS = vcfHz * mInvNyq;
 
       // Control-rate VCF coefficient update. Pass 0 to TrackInputEnv so
