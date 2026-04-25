@@ -194,8 +194,8 @@ struct VCF
   }
 
   static constexpr float kOTAScaleBase = 0.35f;
-  static constexpr float kInputCompressAmount = 0.f;
-  
+
+
   // Circuit-derived constants for the BA662 OTA feedback path.
   //
   // Direct input gain (OscMix through 10K to filter input node):
@@ -258,15 +258,15 @@ struct VCF
         k *= fade;
       }
 
-      mCacheK = k; // cached PRE-compression k
+      mCacheK = k;
 
-      // frqOver clamp: 0.85 keeps g bounded for the TPT approximation.
-      // At 0.85, g = tan(0.85*π/2) ≈ 6.3, which is near the top of where
-      // the bilinear-prewarped integrators stay well-behaved. At 4× OS with
-      // max frq this maps to internal-Nyquist / 2 as intended; at 2× it
-      // maps to output-Nyquist, letting self-osc land in the decimator's
-      // transition/stopband region (matching HW where 52 kHz self-osc on
-      // B15 is attenuated by the output stage before reaching the ADC).
+      // frqOver is clamped at 0.85 as a numerical safety bound — at 0.85,
+      // g = tan(0.85·π/2) ≈ 6.3, near the top of where the bilinear-
+      // prewarped integrators stay well-behaved. At 2× OS max frq gives
+      // frqOver = 0.5; at 4× OS, 0.25 — both well inside the clamp. The
+      // clamp only engages at 1× OS where frq * overScale can reach 1.0,
+      // and in that mode the k-fade above frq=0.7 already collapses
+      // resonance well before frqOver hits the clamp anyway.
       float frqOver = std::min(frq * mOverScale, 0.85f);
       mCacheG = tanf(frqOver * static_cast<float>(M_PI) * 0.5f);
 
@@ -297,54 +297,37 @@ struct VCF
       }
       mCacheG *= expf(logM);
       mCacheG = std::min(mCacheG, 10.f);
+
+      // ---- Derived coefficients (all depend only on cached frq/res) ----
+      const float g = mCacheG;
+      const float g1 = g / (1.f + g);
+      const float g1_2 = g1 * g1;
+      const float g1_3 = g1_2 * g1;
+      const float G = g1_2 * g1_2;
+
+      mC.k = k;
+      mC.g = g;
+      mC.g1 = g1;
+      mC.g1_2 = g1_2;
+      mC.g1_3 = g1_3;
+      mC.G = G;
+      mC.invDen = 1.f / (1.f + k * G);
+
+      mC.otaScale = kOTAScaleBase;
+
+      float baseFbScale = 4.20f * std::clamp((k - 2.5f) * 1.0f, 0.3f, 1.f);
+      mC.kFbScale = baseFbScale;
+      mC.invKFbScale = 1.f / mC.kFbScale;
     }
 
-    // ---- Per-call (audio-rate input-dependent compression) ----
-    // Large-signal loop gain reduction at high cutoff. The BA662 feedback
-    // OTA has thin phase margin at high cutoff (g1 > ~0.35), and under
-    // loud input drive its operating point shifts enough to push small-
-    // signal loop gain below 1 — self-oscillation stops. At moderate
-    // cutoffs the loop has plenty of margin and sustains oscillation
-    // regardless of input level.
-    //
-    // Evidence: B15 Harpsichord preset (max FRQ, max R, active DCO) does
-    // not self-oscillate on HW, but HW does self-oscillate at max FRQ +
-    // max R with no oscillators, and at lower FRQ + max R with active
-    // oscillators. This gating produces exactly that combination.
-    //
-    // Runs per-call (not cached) because mInputEnv changes with signal.
-    const float g1Cached = mCacheG / (1.f + mCacheG);
-    const float g1Weight = std::max(0.f, (g1Cached - 0.35f) / 0.5f);
-    const float drive = mInputEnv;
-    const float kCompress = 1.f / (1.f + drive * g1Weight * kInputCompressAmount);
-    const float k = mCacheK * kCompress;
-
-    // ---- Derived coefficients from compressed k ----
-    const float g = mCacheG;
-    const float g1 = g / (1.f + g);
-    const float g1_2 = g1 * g1;
-    const float g1_3 = g1_2 * g1;
-    const float G = g1_2 * g1_2;
-
-    mC.k = k;
-    mC.g = g;
-    mC.g1 = g1;
-    mC.g1_2 = g1_2;
-    mC.g1_3 = g1_3;
-    mC.G = G;
-    mC.invDen = 1.f / (1.f + k * G);
-
-    mC.otaScale = kOTAScaleBase;
-
-    float baseFbScale = 4.20f * std::clamp((k - 2.5f) * 1.0f, 0.3f, 1.f);
-    mC.kFbScale = baseFbScale;
-    mC.invKFbScale = 1.f / mC.kFbScale;
-
-    {
-      float stateEnergy = fabsf(mS[0]) + fabsf(mS[1]) + fabsf(mS[2]) + fabsf(mS[3]);
-      float energy = std::max(mInputEnv, stateEnergy);
-      mC.noiseLevel = 1e-2f / (static_cast<float>(mOversample) * (1.f + energy * 1000.f));
-    }
+    // Adaptive noise level — runs every call because mInputEnv and state
+    // energy change with the signal. When the filter is loud the noise
+    // floor shrinks (so it doesn't get amplified through the resonant
+    // peak); when quiet the noise can be larger (seeds self-osc on quiet
+    // patches). Cheap (no transcendentals) so per-call cost is negligible.
+    float stateEnergy = fabsf(mS[0]) + fabsf(mS[1]) + fabsf(mS[2]) + fabsf(mS[3]);
+    float energy = std::max(mInputEnv, stateEnergy);
+    mC.noiseLevel = 1e-2f / (static_cast<float>(mOversample) * (1.f + energy * 1000.f));
   }
 
   void TrackInputEnv(float input)
