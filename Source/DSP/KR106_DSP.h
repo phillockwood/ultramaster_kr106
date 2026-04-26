@@ -431,9 +431,17 @@ public:
       }
       else
       {
-        int nv = static_cast<int>(NVoices());
-        for (int i = 0; i < nv; i++)
-          if (mVoiceNote[i] == note) { mVoices[i]->Release(); mVoiceNote[i] = -1; }
+        // ROM $0B30: walk slots from 0, release the first match only.
+        // If the same pitch is held on multiple voices (re-trigger NoteOn
+        // before NoteOff), only one is released here — the others remain
+        // until subsequent NoteOff messages arrive.
+        for (int i = 0; i < mActiveVoices; i++)
+          if (mVoiceNote[i] == note)
+          {
+            mVoices[i]->Release();
+            mVoiceNote[i] = -1;
+            break;
+          }
       }
     }
   }
@@ -466,7 +474,7 @@ public:
       if (mVoices[i]->GetBusy() && mVoiceAge[i] < oldestAge) { oldestAge = mVoiceAge[i]; scopeVoice = i; }
 
     bool anyBusy = false;
-    ForEachVoice([&](kr106::Voice<T>& v) { anyBusy |= v.GetBusy(); });
+    for (int i = 0; i < mActiveVoices; i++) anyBusy |= mVoices[i]->GetBusy();
     bool anyGated = false;
     for (int i = 0; i < mActiveVoices; i++) anyGated |= (mVoiceNote[i] >= 0);
     if (mPortaMode == 0 && mUnisonNote >= 0) anyGated = true;
@@ -759,6 +767,13 @@ public:
 
   void NoteOn(int note, int velocity)
   {
+    if (note < 0 || note >= 128) return;
+    // Edge-trigger dedup matching ROM $01E0 bitfield merge: a NoteOn for an
+    // already-held key produces no change at the bitfield level, so the
+    // assigner is never called. Without this, duplicate NoteOns from MIDI
+    // loops, sustain interactions, or controller quirks would allocate a
+    // second voice for the same pitch.
+    if (mKeysDown.test(note)) return;
     mKeysDown.set(note);
     if (mArp.mEnabled) { mArp.NoteOn(note); return; }
     SendToSynth(note, true, velocity, 0);
@@ -766,6 +781,10 @@ public:
 
   void NoteOff(int note)
   {
+    if (note < 0 || note >= 128) return;
+    // Edge-trigger: ignore NoteOff for keys that aren't held (matches the
+    // ROM XOR-with-saved-state dispatch at $01F8: no change, no action).
+    if (!mKeysDown.test(note)) return;
     mKeysDown.reset(note);
     if (mArp.mEnabled)
     {
@@ -982,11 +1001,12 @@ public:
   {
     n = std::clamp(n, 1, kMaxVoices);
     if (n == mActiveVoices) return;
-    // Release ALL voices beyond the new limit — unison mode doesn't
-    // set mVoiceNote, so we can't rely on it to detect busy voices.
+    // Force unused voices to kFinished — they are no longer in the audio
+    // loop, so a Release() would leave them stuck in kRelease forever and
+    // cause anyBusy to report perpetually true.
     for (int i = n; i < kMaxVoices; i++)
     {
-      mVoices[i]->Release();
+      mVoices[i]->ForceFinish();
       mVoiceNote[i] = -1;
     }
     mActiveVoices = n;

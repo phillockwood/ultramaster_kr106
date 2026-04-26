@@ -967,6 +967,20 @@ public:
 
   void Release() { mADSR.NoteOff(); }
 
+  // Force the ADSR to kFinished with zeroed envelopes — used when reducing
+  // polyphony so the now-unused voices report idle to the LFO/voice tracker
+  // (their audio path is no longer processed, so a Release() that puts them
+  // in kRelease would leave them stuck "busy" forever).
+  void ForceFinish()
+  {
+    mADSR.mState = kr106::ADSR::kFinished;
+    mADSR.mEnv = 0.f;
+    mADSR.mGateEnv = 0.f;
+    mADSR.mEnvInt = 0;
+    mADSR.mEnvNext = 0.f;
+    mADSR.mEnvPrev = 0.f;
+  }
+
   void SetSampleRateAndBlockSize(double sampleRate, int blockSize)
   {
     (void)blockSize;

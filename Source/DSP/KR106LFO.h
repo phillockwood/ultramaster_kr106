@@ -366,28 +366,31 @@ struct LFO
     bool newState = mActive || mTrigger;
     bool gated = mGated || mTrigger;
 
-    if (gated && !mWasGated)
+    if (mMode == 1)
     {
-      if (mMode == 1 || mArmed)
+      // Manual mode: reset on every key-press edge.
+      if (gated && !mWasGated)
+      {
+        mAmp = 0.f;
+        mAmpInt = 0.f;
+        if (mModel != kJ106) RecalcDelayJ6();
+        else RecalcDelay106();
+      }
+    } else
+    {
+      // Auto mode: arm when all voices fully idle (release tails ended);
+      // reset on the first gate rise after that.
+      if (!newState)
+        mArmed = true;
+      if (gated && !mWasGated && mArmed)
       {
         mAmp = 0.f;
         mAmpInt = 0.f;
         mArmed = false;
-        if (mModel != kJ106)
-          RecalcDelayJ6();
-        else
-        {
-          // Reset only the onset envelope ($FF56 holdoff, $FF5A ramp)
-          // — matches ROM $0318/$031C. The LFO accumulator $FF4D and
-          // direction/polarity flag $FF4A are never reset in hardware;
-          // they free-run from power-on. This is the mechanism behind
-          // the B54/A87 "growing signal over retriggers" behavior.
-          RecalcDelay106();
-        }
+        if (mModel != kJ106) RecalcDelayJ6();
+        else RecalcDelay106();
       }
     }
-    if (!gated && mWasGated)
-      mArmed = true;
 
     mWasGated = gated;
     mWasActive = newState;
