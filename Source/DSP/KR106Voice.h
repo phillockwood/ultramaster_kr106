@@ -548,6 +548,28 @@ public:
     return (coeff / 255.f) * kMaxSemitones;
   }
 
+  // Inverse of the analog taper used in dcoLfoDepth106. Given a post-taper
+  // byte (= what the firmware sees, normalized 0..1), returns the pre-taper
+  // slider position s such that  s / (1 + 5s - 5s²) == t_post.
+  //
+  // Used at patch-load time: factory presets and SysEx APR carry post-taper
+  // bytes (they were ADC readings of a real analog slider on the original
+  // hardware), but our parameter convention stores pre-taper slider position.
+  // Calling this on the patch byte before SetParam puts the UI slider where
+  // it would have been to produce that byte through the taper.
+  //
+  // Solves 5·t_post·s² + (1 − 5·t_post)·s − t_post = 0 for s in [0, 1].
+  static float dcoLfoDepth106_inverseTaper(float t_post)
+  {
+    if (t_post <= 0.f) return 0.f;
+    if (t_post >= 1.f) return 1.f;
+    const float a = 5.f * t_post;
+    const float b = 1.f - 5.f * t_post;
+    const float c = -t_post;
+    const float disc = b * b - 4.f * a * c;
+    return (-b + std::sqrt(disc)) / (2.f * a);
+  }
+
   // portaRate() - Maps normalized portamento slider (0..1) to a glide rate
   // in semitones per second.
   //

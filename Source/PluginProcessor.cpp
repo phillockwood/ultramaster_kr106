@@ -457,7 +457,17 @@ KR106AudioProcessor::KR106AudioProcessor()
       {
         auto range = fp->getNormalisableRange();
         if (range.start == 0.f && range.end == 1.f)
-          p.values[i] = raw / 127.f;
+        {
+          float v = raw / 127.f;
+          // J106 DCO LFO depth slider has an analog taper baked into its
+          // depth function. Patch bytes are post-ADC (= post-taper), so
+          // we need to store the pre-taper slider position that would
+          // produce that byte. Only the J106 bank patches need this; the
+          // J6/J60 depth functions don't include an explicit taper.
+          if (i == kDcoLfo && j >= 128) // J106 bank (presets 128-255)
+            v = kr106::Voice<float>::dcoLfoDepth106_inverseTaper(v);
+          p.values[i] = v;
+        }
         else
           p.values[i] = static_cast<float>(raw);
       }
@@ -881,7 +891,15 @@ void KR106AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
           if (!p) return;
           auto range = p->getNormalisableRange();
           if (range.start == 0.f && range.end == 1.f)
+          {
+            // J106 DCO LFO depth: SysEx carries the post-ADC byte, but our
+            // parameter convention stores the pre-taper slider position
+            // (the taper is reapplied inside dcoLfoDepth106). Convert.
+            // SysEx APR is always J106 here per the decoder setup.
+            if (idx == kDcoLfo)
+              val = kr106::Voice<float>::dcoLfoDepth106_inverseTaper(val);
             p->setValueNotifyingHost(val);
+          }
           else
             p->setValueNotifyingHost(p->convertTo0to1(val));
       };
