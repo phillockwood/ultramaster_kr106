@@ -47,6 +47,8 @@ struct AnalogFloorNoise
   float mShelfState = 0.f;    // high-shelf state
   float mShelfCoeff = 0.f;    // shelf corner coefficient (0 = disabled)
   float mShelfGain = 0.f;     // shelf high-frequency gain - 1 (0 = flat)
+  float mPink0=0, mPink1=0, mPink2=0, mPink3=0, mPink4=0, mPink5=0, mPink6=0;
+  bool mPinkEnabled = false;
 
   void Init(float sampleRate, float cutoffHz = 20000.f)
   {
@@ -69,17 +71,39 @@ struct AnalogFloorNoise
   float Process()
   {
     mSeed = mSeed * 196314165u + 907633515u;
-    float white = (2.f * static_cast<float>(mSeed) /
-                   static_cast<float>(0xFFFFFFFFu)) - 1.f;
-    mLpState += mLpCoeff * (white - mLpState);
+    float white = (2.f * static_cast<float>(mSeed) / static_cast<float>(0xFFFFFFFFu)) - 1.f;
 
-    if (mShelfGain != 0.f)
+    if (mPinkEnabled)
     {
-      // High shelf = input + shelf_gain * (input - lowpass(input))
-      mShelfState += mShelfCoeff * (mLpState - mShelfState);
-      return mLpState + mShelfGain * (mLpState - mShelfState);
+      // Paul Kellet's economical pink filter (~ ±0.5 dB across audio band)
+      mPink0 = 0.99886f * mPink0 + white * 0.0555179f;
+      mPink1 = 0.99332f * mPink1 + white * 0.0750759f;
+      mPink2 = 0.96900f * mPink2 + white * 0.1538520f;
+      mPink3 = 0.86650f * mPink3 + white * 0.3104856f;
+      mPink4 = 0.55000f * mPink4 + white * 0.5329522f;
+      mPink5 = -0.7616f * mPink5 - white * 0.0168980f;
+      float pink = mPink0 + mPink1 + mPink2 + mPink3 + mPink4 + mPink5 + mPink6 + white * 0.5362f;
+      mPink6 = white * 0.115926f;
+
+      float pinkOut = pink * 0.11f;
+
+      if (mShelfGain != 0.f)
+      {
+        mShelfState += mShelfCoeff * (pinkOut - mShelfState);
+        return pinkOut + mShelfGain * (pinkOut - mShelfState);
+      }
+      return pinkOut;
+    } else
+    {
+      mLpState += mLpCoeff * (white - mLpState);
+      if (mShelfGain != 0.f)
+      {
+        // High shelf = input + shelf_gain * (input - lowpass(input))
+        mShelfState += mShelfCoeff * (mLpState - mShelfState);
+        return mLpState + mShelfGain * (mLpState - mShelfState);
+      }
+      return mLpState;
     }
-    return mLpState;
   }
 };
 
@@ -116,83 +140,36 @@ struct RailRipple
 };
 
 // ============================================================
-// BBD clock feedthrough — sine at the current MN3009 master clock rate
-// ============================================================
-// Returns a unit-amplitude sine at the clock rate passed in each sample.
-// Process() should be fed the instantaneous BBD master clock frequency
-// from the Chorus' delay-to-clock calculation. The MN3009 master clock
-// runs at 2× the per-stage transfer rate (each cycle moves a charge
-// packet through 2 stages, one per phase φ1/φ2), so:
-//
-//   f_clk_master = 2 * N_stages / (2 * τ) = N_stages / τ
-//
-// For N_stages = 256 and τ = 3.30 ms, f_clk = 77.6 kHz — above Nyquist
-// at 96 kHz host rate. The Process() guard self-mutes when this happens.
-// At 192 kHz host rate (Nyquist 96 kHz) the clock is in-band and adds
-// a faint sweeping whistle that tracks the LFO, matching real hardware.
-struct BBDClockFeedthrough
-{
-  float mPhase = 0.f;
-  float mSampleRate = 44100.f;
-
-  void Init(float sampleRate)
-  {
-    mSampleRate = sampleRate;
-    mPhase = 0.f;
-  }
-
-  void Reset() { mPhase = 0.f; }
-
-  float Process(float clockHz)
-  {
-    const float nyq = 0.5f * mSampleRate;
-    if (clockHz >= nyq) return 0.f;
-    // Linear amplitude taper from 0.9*Nyquist to Nyquist
-    float taper = 1.f;
-    const float rolloffStart = 0.9f * nyq;
-    if (clockHz > rolloffStart) taper = (nyq - clockHz) / (nyq - rolloffStart);
-    mPhase += clockHz / mSampleRate;
-    if (mPhase >= 1.f) mPhase -= 1.f;
-    return taper * sinf(2.f * static_cast<float>(M_PI) * mPhase);
-  }
-};
-
-// ============================================================
 // Calibrated levels (from background_noise.wav, April 2026)
 // ============================================================
 namespace analog_noise {
 
-  // Dry path — always on, injected pre-HPF in DSP.h.
-  // Calibrated to give -67.8 dB S/N below the DSP saw at typical playing
-  // level (-12.2 dBFS rms reference).
-  constexpr float kDryBroadbandGain = 1.7e-4f;
-  
-  // Dry rail ripple — calibrated from hardware band measurements scaled
-  // to DSP saw level. Amplitudes (not rms) — RailRipple uses sin amplitude.
-  constexpr float kDryRipple120 = 3.3e-5f;
-  constexpr float kDryRipple240 = 2.6e-5f;
-  constexpr float kDryRipple360 = 1.2e-5f;
-  
-  // Wet path — chorus-on only, injected inside Chorus::Process.
-  // Wet broadband baseline plus a high shelf at 5 kHz reproduces the
-  // hardware HF tilt (+21 dB midband, +33 dB HF over dry).
-  constexpr float kWetBroadbandGain = 1.2e-4f;
-  constexpr float kWetShelfCornerHz = 5000.f;
-  constexpr float kWetShelfBoostDb  = 15.f;
-  
-  // Wet rail ripple — measured +18 dB above dry at 120 Hz, decreasing
-  // at higher harmonics. Injected common-mode (shared rail) into both
-  // wet channels.
-  constexpr float kWetRipple120 = 2.6e-4f;
-  constexpr float kWetRipple240 = 8.3e-5f;
-  constexpr float kWetRipple360 = 2.9e-5f;
-  
-  // BBD clock feedthrough amplitude. Above Nyquist at common host sample
-  // rates with the 3.30 ms center delay, so the BBDClockFeedthrough self-
-  // mutes most of the time. Only matters at 192 kHz host rate where the
-  // clock falls in-band.
-  constexpr float kBBDClockGain = 6.0e-5f;
-  
+// Dry path — always on, injected pre-HPF in DSP.h.
+// Calibrated to give -67.8 dB S/N below the DSP saw at typical playing
+// level (-12.2 dBFS rms reference).
+constexpr float kDryBroadbandGain = 1.5e-3f;
+
+// was 1.7e-4 — compensate for HF cut
+// Dry rail ripple — calibrated from hardware band measurements scaled
+// to DSP saw level. Amplitudes (not rms) — RailRipple uses sin amplitude.
+constexpr float kDryRipple120 = 1.8e-5f; // was 3.3e-5 (−5 dB)
+constexpr float kDryRipple240 = 8.9e-6f; // was 2.6e-5 (−9 dB)
+constexpr float kDryRipple360 = 6.3e-6f; // was 1.2e-5 (−6 dB)
+
+// Wet path — chorus-on only, injected inside Chorus::Process.
+// Wet broadband baseline plus a high shelf at 5 kHz reproduces the
+// hardware HF tilt (+21 dB midband, +33 dB HF over dry).
+constexpr float kWetBroadbandGain = 1.8e-3f;
+constexpr float kWetShelfCornerHz = 3000.f;
+constexpr float kWetShelfBoostDb = 6.f;
+
+// Wet rail ripple — measured +18 dB above dry at 120 Hz, decreasing
+// at higher harmonics. Injected common-mode (shared rail) into both
+// wet channels.
+constexpr float kWetRipple120 = 7.9e-5f; // was 1.3e-4 (−4 dB)
+constexpr float kWetRipple240 = 2.2e-5f; // was 4.15e-5 (−5 dB)
+constexpr float kWetRipple360 = 9.8e-6f; // was 7.3e-6 (+3 dB)
+
   } // namespace analog_noise
   
 } // namespace kr106

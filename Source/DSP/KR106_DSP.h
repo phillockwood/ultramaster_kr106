@@ -201,13 +201,23 @@ public:
     for (auto& v : mVoices) func(*v);
   }
 
+  // Real Juno-106 DCOs do not drift — they are digitally clocked, so all
+  // voices stay in tune with each other regardless of temperature, age, or
+  // playing time. Unlike VCO-based synths (Minimoog, Prophet-5), there is
+  // no per-voice oscillator drift to model. We add a simulated drift here
+  // purely as a musical feature: in unison mode it gives the stacked
+  // voices a slight pitch spread that sounds richer than a perfectly-tuned
+  // stack. In poly mode the same drift would just sound out of tune across
+  // notes, so it's gated to unison only (mPortaMode == 0).
+  float EffectiveDrift() const { return (mPortaMode == 0) ? mDriftAmount : 0.f; }
+
   // Set the global drift amount and apply it to all voices (rescaling
   // their existing static-offset units, no reroll).
   void SetDriftAmount(float drift)
   {
     mDriftAmount = std::clamp(drift, 0.f, 1.f);
     uint32_t salt = mDriftSessionSalt;
-    float d = mDriftAmount;
+    float d = EffectiveDrift();
     ForEachVoice([d, salt](kr106::Voice<T>& v) {
       v.SetDriftAmount(d, false, salt);
     });
@@ -218,7 +228,7 @@ public:
   void RerollDriftUnits(uint32_t newSalt)
   {
     mDriftSessionSalt = newSalt;
-    float d = mDriftAmount;
+    float d = EffectiveDrift();
     uint32_t s = newSalt;
     ForEachVoice([d, s](kr106::Voice<T>& v) {
       v.SetDriftAmount(d, true, s);
@@ -297,14 +307,14 @@ public:
   {
     int nv = mActiveVoices;
 
-    // Step 1: Check capacity. If the last entry in voiceTbl is still playing
-    // (mVoiceNote >= 0), all voices are active — drop the note.
+    // $0ABA-$0AC3: capacity check on voiceTbl[nv-1].
     int lastVoice = mVoiceTbl[nv - 1];
-    if (mVoiceNote[lastVoice] >= 0)
-      return -1; // all voices active, note dropped
+    if (mVoiceNote[lastVoice] >= 0) return -1;
 
-    // Step 2: Search from back for restart candidate (same note, free).
-    // Walk backward through voiceTbl from the end (free voices are at back).
+    // $0AC4-$0AD1: walk back-to-front. Exit on:
+    //   - first restart match (FIRST hit wins, not last)
+    //   - first busy voice encountered (sets firstFreePos = pos+1)
+    //   - end of queue (firstFreePos = 0)
     int restartPos = -1;
     int firstFreePos = -1;
     for (int pos = nv - 1; pos >= 0; pos--)
@@ -312,27 +322,28 @@ public:
       int vi = mVoiceTbl[pos];
       if (mVoiceNote[vi] >= 0)
       {
-        // Hit a playing voice — stop searching.
-        // The first free voice is the one just after this.
         firstFreePos = pos + 1;
-        break;
+        break; // $0AC9: JR $0AD2
       }
-      // This voice is free. Check if it last played the same note.
-      if (mVoices[vi]->mMidiNote == note)
+      if (mEverPlayed[vi] && mLastNote[vi] == note)
+      {
         restartPos = pos;
+        break; // $0ACE: JR $0AE0  (FIRST match wins)
+      }
     }
-    // If all voices are free, firstFreePos is 0
     if (firstFreePos < 0) firstFreePos = 0;
 
-    // Step 3: Pick the voice
-    int selectedPos = (restartPos >= 0) ? restartPos : firstFreePos;
-
-    // Step 4: Bubble selected voice to front (position 0).
-    // Swap with each adjacent entry above it, preserving order of others.
-    for (int pos = selectedPos; pos > 0; pos--)
-      std::swap(mVoiceTbl[pos], mVoiceTbl[pos - 1]);
-
-    return mVoiceTbl[0];
+    if (restartPos >= 0)
+    {
+      // $0AD7-$0AE1: bubble matched voice from restartPos to slot 0.
+      for (int pos = restartPos; pos > 0; pos--)
+        std::swap(mVoiceTbl[pos], mVoiceTbl[pos - 1]);
+      return mVoiceTbl[0];
+    } else
+    {
+      // $0AD2 → $0AE5: first-free path, no bubble.
+      return mVoiceTbl[firstFreePos];
+    }
   }
 
   // Hardware-accurate NoteOff: bubble released voice to back of voiceTbl.
@@ -370,6 +381,8 @@ public:
     v.Trigger(mIgnoreVelocity ? 1.f : velocity / 127.f, v.GetBusy());
     mVoiceNote[voiceIdx] = note;
     mVoiceAge[voiceIdx] = ++mVoiceAgeCounter;
+    mLastNote[voiceIdx]   = note;
+    mEverPlayed[voiceIdx] = true;
   }
 
   void SendToSynth(int note, bool noteOn, int velocity, int offset = 0)
@@ -525,7 +538,7 @@ public:
     // Drift walk update (per buffer is plenty for sub-Hz LFOs).
     {
       float dt = static_cast<float>(nFrames) / mSampleRate;
-      float d = mDriftAmount;
+      float d = EffectiveDrift();
       ForEachVoice([d, dt](kr106::Voice<T>& v) { v.UpdateDriftWalk(d, dt); });
     }
 
@@ -721,8 +734,10 @@ public:
     mHPF.Init();
     mHPF.SetMode(1);
     mChorus.Init(mSampleRate);
-    mFloorNoise.Init(mSampleRate); 
-    mFloorRipple.SetMainsHz(60.f, mSampleRate);  // 50.f for EU
+    mFloorNoise.Init(mSampleRate);
+    mFloorNoise.mPinkEnabled = true;
+    mFloorNoise.SetHighShelf(500, -16, mSampleRate);
+    mFloorRipple.SetMainsHz(60.f, mSampleRate); // 50.f for EU
     mFloorRipple.SetAmplitudes(
     kr106::analog_noise::kDryRipple120,
     kr106::analog_noise::kDryRipple240,
@@ -842,6 +857,9 @@ public:
   bool mIgnoreVelocity = true;
   bool mMonoRetrigger = true;
   int mVoiceNote[kMaxVoices] = {-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+  int  mLastNote[kMaxVoices]   = {-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+  bool mEverPlayed[kMaxVoices] = {false,false,false,false,false,false,
+                                  false,false,false,false};
   int64_t mVoiceAge[kMaxVoices] = {};
   int64_t mVoiceAgeCounter = 0;
   int mRoundRobinNext = 0;
