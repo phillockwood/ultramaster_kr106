@@ -82,7 +82,6 @@ struct LFO
   bool mActive      = false; // any voice busy (including release tails)?
   bool mGated       = false; // any voice has active gate (key held)?
   bool mWasGated    = false; // previous block's gated state
-  bool mWasActive   = false;
   int mMode         = 0;     // 0=auto, 1=manual
   bool mTrigger     = false; // manual trigger state
   Model mModel      = kJ106;
@@ -378,9 +377,22 @@ struct LFO
       }
     } else
     {
-      // Auto mode: arm when all voices fully idle (release tails ended);
-      // reset on the first gate rise after that.
-      if (!newState)
+      // Auto mode — mirrors IC29 main loop at $030D-$0323 / $036B.
+      //
+      // flags1 bit 3 acts as an "armed for retrigger" latch (= mArmed here):
+      //   $036B  voiceRun & $3F == 0   ->  set flags1.3
+      //   $030D  voiceRun & $3F != 0   ->  if flags1.3 is set, zero $FF56
+      //                                    (holdoff accumulator) and $FF5A
+      //                                    (ramp accumulator), clear flags1
+      //                                    bits 1, 2, 3 (phase flags + armed).
+      //
+      // voiceRun ($FF11) is written only at $02FA / $02FF and copies
+      // noteGate ($FF10). noteGate is set/cleared by IC1's voice-on /
+      // voice-off serial commands at $0118 / $00A8 — it tracks key-down
+      // state, NOT the envelope release tail. The LFO therefore arms as
+      // soon as every key is up, even if voices are still ringing out.
+      // (mGated has the same gate-only semantics as voiceRun.)
+      if (!gated)
         mArmed = true;
       if (gated && !mWasGated && mArmed)
       {
@@ -393,7 +405,6 @@ struct LFO
     }
 
     mWasGated = gated;
-    mWasActive = newState;
   }
 
   // J106 integer LFO tick. Call once per main-loop tick (~234 Hz).
