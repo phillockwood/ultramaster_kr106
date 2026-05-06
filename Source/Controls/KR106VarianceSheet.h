@@ -30,7 +30,7 @@ public:
         {
             mAnalogNoiseKnob = mulToKnob(mProcessor->mDSP.mNoiseFloorMul);
             mMainsNoiseKnob = mulToKnob(mProcessor->mDSP.mMainsMul);
-            mClockNoiseKnob = mProcessor->mDSP.mChorus.mClockMul; // linear 0-1
+            mClockNoiseKnob = mulToKnob(mProcessor->mDSP.mChorus.mClockMul);
             mBbdDriveKnob = mProcessor->mDSP.mChorus.mBbdDriveUser / 100.f;
             mDriftKnob = mProcessor->mDSP.mDriftAmount;
             // Note: chorus mAnalogMul is always kept in sync with mNoiseFloorMul
@@ -90,7 +90,7 @@ public:
             int cellH = kRowH;
             int cellW = w / kTotalCols; // not used directly, see colW7 below
 
-            auto paintNoiseCell = [&](int hitId, int x0, int cw, const char* label, float knobVal) {
+            auto paintNoiseCell = [&](int hitId, int x0, int cw, const char* label, float knobVal, bool showDb) {
                 bool isHover = (mHoverRow == hitId);
                 bool isSel = (mSelectedRow == hitId);
                 if (isSel)
@@ -105,17 +105,33 @@ public:
                 }
                 g.setColour(isSel ? bg() : bright());
                 g.drawSingleLineText(label, x0 + 4, y + cellH - 2);
-                int pct = juce::roundToInt(knobVal * 100.f);
-                g.drawSingleLineText(juce::String(pct) + " %",
+                juce::String text;
+                if (showDb)
+                {
+                    // Tapered noise mapping: knob 0 = silent, 0.5 = 0 dB, 1.0 = +12 dB.
+                    if (knobVal <= 0.f)
+                        text = "-INF dB";
+                    else
+                    {
+                        float db = 20.f * log10f(knobToMul(knobVal));
+                        text = juce::String(db, 1) + " dB";
+                    }
+                }
+                else
+                {
+                    int pct = juce::roundToInt(knobVal * 100.f);
+                    text = juce::String(pct) + " %";
+                }
+                g.drawSingleLineText(text,
                                      x0 + cw - 8, y + cellH - 2,
                                      juce::Justification::right);
             };
             int colW7 = w / kTotalCols;
-            paintNoiseCell(-10, 0,         colW7, "DCO DRIFT",    mDriftKnob);
-            paintNoiseCell(-5,  colW7,     colW7, "FLOOR NS",  mAnalogNoiseKnob);
-            paintNoiseCell(-6,  colW7 * 2, colW7, "MAINS NS",  mMainsNoiseKnob);
-            paintNoiseCell(-7,  colW7 * 3, colW7, "CHORUS NS", mClockNoiseKnob);
-            paintNoiseCell(-8,  colW7 * 4, colW7, "BBD DRIVE",    mBbdDriveKnob);
+            paintNoiseCell(-10, 0,         colW7, "DCO DRIFT",    mDriftKnob,        false);
+            paintNoiseCell(-5,  colW7,     colW7, "FLOOR NS",     mAnalogNoiseKnob,  true);
+            paintNoiseCell(-6,  colW7 * 2, colW7, "MAINS NS",     mMainsNoiseKnob,   true);
+            paintNoiseCell(-7,  colW7 * 3, colW7, "CHORUS NS",    mClockNoiseKnob,   true);
+            paintNoiseCell(-8,  colW7 * 4, colW7, "BBD DRIVE",    mBbdDriveKnob,     false);
         }
 
         // Header row (bright text on dark bg)
@@ -533,7 +549,7 @@ private:
         mProcessor->mDSP.mChorus.mAnalogMul = analogMul;
         mProcessor->mDSP.mMainsMul = knobToMul(mMainsNoiseKnob);
         mProcessor->mDSP.mChorus.mMainsMul = knobToMul(mMainsNoiseKnob);
-        mProcessor->mDSP.mChorus.mClockMul = mClockNoiseKnob; // linear 0-1, default 0.5
+        mProcessor->mDSP.mChorus.mClockMul = knobToMul(mClockNoiseKnob); // 0=silent, 0.5=unity, 1.0=4x
         // BBD drive: userVal 0..100, k = 0.48 * (userVal/100)^2
         float userVal = mBbdDriveKnob * 100.f;
         mProcessor->mDSP.mChorus.mBbdDriveUser = userVal;
