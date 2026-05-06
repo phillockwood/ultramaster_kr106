@@ -197,12 +197,26 @@ public:
                 }
 
                 auto info = kr106::Voice<float>::GetVarianceInfo(p);
-                int display = juce::roundToInt(mValues[v][p] * info.displayScale + info.displayOffset);
+                float displayF = mValues[v][p] * info.displayScale + info.displayOffset;
+                float displayStep = info.step * info.displayScale;
                 juce::String text;
-                if (info.displayOffset != 0.f)
-                    text = juce::String(display);
+                if (displayStep < 0.99f)
+                {
+                    // Sub-integer step (e.g. 0.25): show enough decimals
+                    int decimals = (displayStep < 0.1f) ? 2 : (displayStep < 0.5f ? 2 : 1);
+                    if (info.displayOffset != 0.f)
+                        text = juce::String(displayF, decimals);
+                    else
+                        text = (displayF >= 0.f ? "+" : "") + juce::String(displayF, decimals);
+                }
                 else
-                    text = (display >= 0 ? "+" : "") + juce::String(display);
+                {
+                    int display = juce::roundToInt(displayF);
+                    if (info.displayOffset != 0.f)
+                        text = juce::String(display);
+                    else
+                        text = (display >= 0 ? "+" : "") + juce::String(display);
+                }
                 text += " " + juce::String(info.unit);
 
                 g.setColour(inactive ? disabled() : isSelected ? bg() : bright());

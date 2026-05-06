@@ -263,8 +263,8 @@ public:
       { "VCF FRQ",   750.f,  1.f, 1200.f/1143.f,  0.f, "cts",     10.f          }, // ±750 DAC counts (1143 DAC/oct -> ±787 cts displayed)
       { "VCF WIDTH", 100.f,  1.f,           1.f,  0.f, "cts/oct", 10.f          }, // ±100 cts/oct max, Human ±10
       { "VCA",       0.12f,  0.01f,       100.f,  0.f, "pct",     0.12f * 0.2f  }, // ±12% gain
-      { "PW Lo",     0.05f,  0.01f,       100.f, 50.f, "pct",     0.02f         }, // Full ±5 (45-55), Human ±2 (48-52)
-      { "PW Hi",     0.05f,  0.01f,       100.f, 95.f, "pct",     0.02f         }, // Full ±5 (90-100), Human ±2 (93-97)
+      { "PW Lo",     0.05f,  0.0025f,     100.f, 50.f, "pct",     0.02f         }, // Full ±5 (45-55), Human ±2 (48-52), 0.25% step
+      { "PW Hi",     0.05f,  0.0025f,     100.f, 95.f, "pct",     0.02f         }, // Full ±5 (90-100), Human ±2 (93-97), 0.25% step
     };
     return info[idx];
   }
