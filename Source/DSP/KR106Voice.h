@@ -781,6 +781,7 @@ public:
   // 0 dB (1.0) at full slider.
   static float dcoNoiseLevel_j60(float t)
   {
+    if (t <= 0.f) return 0.f;
     constexpr float kA = 1.1260f;  // output scale (1.0 at t=1)
     constexpr float kB = 0.0227f;  // knee softness
     constexpr float kC = 0.1120f;  // turn-on threshold
@@ -802,6 +803,7 @@ public:
   // Normalized to 0 dB (1.0) at full slider.
   static float dcoNoiseLevel_j106(float t)
   {
+    if (t <= 0.f) return 0.f;
     constexpr float kA = 1.0632f;  // output scale (1.0 at t=1)
     constexpr float kB = 0.0146f;  // knee softness
     constexpr float kC = 0.0594f;  // turn-on threshold
