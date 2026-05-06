@@ -4,6 +4,8 @@
 #include <cmath>
 #include <algorithm>
 
+#include "J106DACHzTable.h"   // kV4Hz[4096] — measured V4 cutoff per DAC code
+
 // Clean-room reimplementation of the D7811G firmware's VCF cutoff frequency
 // calculation ($04D5–$064E). All arithmetic is uint16_t with explicit
 // carry/borrow tracking, matching the uPD7811's 16-bit EA register pair
@@ -143,112 +145,54 @@ inline uint16_t calc_vcf_bend_amt(
 }
 
 /**
- * Convert DAC value to VCF cutoff frequency in Hz.
+ * Convert the firmware's 14-bit VCF DAC accumulator to cutoff frequency.
  *
- * ═══════════════════════════════════════════════════════════════════════
- * Anchors derived from the uPD7810 ROM calibration patch cross-referenced
- * with the service manual's 248 Hz tuning target. Defaults (frqTrim=0,
- * widthTrim=1) reproduce a perfectly calibrated unit.
- * ═══════════════════════════════════════════════════════════════════════
- *
- * DERIVATION
- *
- * The Juno-106 ROM contains a built-in test/calibration patch at a known
- * address. Its VCF-relevant parameters are:
- *
- *     VCF Freq  = $B1    (bit 7 is a flag; value = $31 = 49 decimal)
- *     VCF Res   = $7F    (max)
- *     VCF KBD   = $7F    (max)
- *     VCF Env   = $00    (no envelope modulation)
- *     VCF LFO   = $00    (no LFO modulation)
- *
- * The bit-7-as-flag interpretation was confirmed by systematic comparison
- * of all ROM test patches against the service manual: 127 out of 128
- * parameter values match perfectly when bit 7 is stripped. For example,
- * patch 8 has Decay=$8A and Release=$0A — different raw bytes, same lower
- * 7 bits ($0A), and the service manual shows the same value (1.3) for both.
- *
- * The service manual calibration procedure (Section 4) states:
- *   - RES max, KBD max, play C4 → self-oscillation at 248 Hz
- *   - Play C6 → self-oscillation at 992 Hz (verifies 2-octave KBD tracking)
- *
- * C4 is the firmware's KBD reference point (zero offset). At C4 with
- * ENV=0 and LFO=0, the DAC sees only the VCF Freq slider contribution:
- *
- *     dac = 49 × 128 = 6272
- *     248 Hz = kBaseFreq × 2^(6272 / 1143)
- *     kBaseFreq = 5.528
- *
- * The 992/248 ratio of exactly 4.0× (2 octaves over 2286 DAC counts)
- * confirms 1143 DAC per octave → kScale = ln(2)/1143.
- *
- * For a 4-pole cascaded integrator (IR3109), self-oscillation occurs at
- * the cutoff frequency: each pole contributes arctan(ω/ωc) = 45° at
- * ω = ωc, totaling 180° for the feedback path. So 248 Hz IS the cutoff,
- * not a resonance-shifted artifact.
- *
- * SERVICE MANUAL ERRATUM
- *
- * The service manual states the VCF slider is at "6.3/10" for this test.
- * This is incorrect. The ROM patch loads $B1, whose actual parameter value
- * is $31 = 49 (bit 7 is a flag, not data). On the 0–127 scale this is
- * 49/127 = 3.9/10. The manual writer likely interpreted the raw byte $B1
- * without stripping the flag bit: $B1 >> 1 = $58 = 88, giving 88/127 ≈
- * 6.9/10, possibly rounded or misread as 6.3. The ROM is the ground truth.
- *
- * CALIBRATION
- *
- * The hardware procedure is iterative: adjust FREQ trimpot so C4 self-osc
- * = 248 Hz, then WIDTH trimpot so C6 self-osc = 992 Hz; the two interact,
- * so repeat until both within ±10 cents. This defines both anchors
- * simultaneously. Unit-to-unit variation observed at DAC=16383 across
- * voices (51202, 51238, 52251, 51848 Hz — 35 cents spread) is ultrasonic
- * and does not affect musical tracking; any residual audible-range
- * variation is absorbed by frqTrim / widthTrim settings.
- *
- * COMPRESSION
- *
- * The IR3109 expo converter saturates at high bias currents (physical
- * limit of the translinear cell). Modeled as:
- *
- *     f_out = f_raw / (1 + (f_raw/kCeil)^n)^(1/n)
- *
- * With kCompN=6, the exp line stays within 0.01 cents of ideal through
- * 10 kHz and within 1 cent through 20 kHz, then compresses sharply. Max
- * at DAC=16383 lands at 51923 Hz, inside the observed voice-spread
- * envelope. The hard knee is deliberate: self-oscillation tracking is
- * only relevant in the audio range, and the real IR3109's earlier
- * rolloff is not worth replicating at cost of audible-range accuracy.
+ * Implementation: direct lookup against `kV4Hz[4096]` in J106DACHzTable.h —
+ * a measured per-DAC-code frequency profile from voice card V4 of the
+ * lfrancis J106, gain-calibrated so DAC code 1568 (= byte 49 anchor)
+ * reads exactly 248.000 Hz. The table is the authoritative model: it
+ * encodes the BA662/IR3109 exp converter's full shape (kFloor, exp body,
+ * soft-knee), the slider sweep's bow, and DAC bit-boundary INL — none of
+ * which a closed-form analytical model captured cleanly.
  *
  * SIGNAL PATH
  *
  *   VCF Freq slider (0–127) ──┐
- *   KBD tracking               ├── summed in firmware ── DAC ── × widthTrim
+ *   KBD tracking               ├── summed in firmware ── 14-bit accumulator
  *   ENV amount × env level     │                                    │
- *   LFO amount × LFO level  ──┘                               summing node
+ *   LFO amount × LFO level  ──┘                               × widthTrim
  *                                                                   │
  *                                                      + frqTrim ───┤
- *                                                    (DC bias from  │
- *                                                     ±15V divider) │
  *                                                                   ▼
- *                                                   IR3109 expo converter
+ *                                                          clamp [0, 16383]
  *                                                                   │
- *                                                            VCF cutoff freq
+ *                                                            >> 2 (top 12)
+ *                                                                   │
+ *                                                          kV4Hz[code] → Hz
  *
- * frqTrim and widthTrim mirror the hardware FREQ and WIDTH trimpots.
+ * frqTrim/widthTrim mirror the hardware FREQ and WIDTH trimpots; they
+ * shift the accumulator BEFORE the chip's 12-bit truncation, so they have
+ * sub-DAC-code resolution in the model even though the chip itself does
+ * not. With (frqTrim=0, widthTrim=1) the table directly reproduces the
+ * service-manual anchors:
+ *   - DAC code 1568 (byte 49 at C4 with KBD center)        → 248 Hz
+ *   - DAC code 2139 (byte 49 + 2-octave KBD shift at C6)   → 992 Hz
+ *
+ * Per-voice variance is captured by (frqTrim, widthTrim) deviations from
+ * (0, 1). Two trim parameters can hit any two anchor measurements
+ * exactly; any further per-voice non-linearity is unmodeled (the lfrancis
+ * V4 table is the reference voice).
  */
 inline float dacToHz(uint16_t dac, float frqTrim = 0.0f, float widthTrim = 1.0f)
 {
-  static constexpr float kBaseFreq = 5.528477f;       // = 248 / 2^(6272/1143)
-  static constexpr float kScale    = 0.0006064280f;   // = ln(2) / 1143
-  static constexpr float kCeil     = 52000.0f;
-  static constexpr float kCompN    = 6.0f;
-  static constexpr float kInvCompN = 1.f / kCompN;
-
+  // Per-voice trim is applied to the 14-bit firmware accumulator. Hardware
+  // writes the top 12 bits to the DAC chip, so we mask the bottom 2 bits.
   float cv_lin = static_cast<float>(dac) * widthTrim + frqTrim;
-  float f = kBaseFreq * expf(cv_lin * kScale);
-  float r = f / kCeil;
-  return f / powf(1.f + powf(r, kCompN), kInvCompN);
+  int   internal = static_cast<int>(cv_lin + 0.5f);
+  if (internal < 0)     internal = 0;
+  if (internal > 16383) internal = 16383;
+  int code = internal >> 2;  // 12-bit DAC chip code (0..4095)
+  return static_cast<float>(kV4Hz[code]);
 }
 
 
