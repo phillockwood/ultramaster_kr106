@@ -551,17 +551,19 @@ static void doAnalyze(const char* inputFile)
         }
         auto pk = measurePeaks(mono.data(), start, soundingSamples_250ms);
 
-        // Per-cycle duty measurement using adaptive threshold
+        // Per-cycle duty measurement using adaptive threshold.
+        // Collect every complete cycle, then drop the first and last to
+        // avoid edge effects at the section boundaries (settling at the
+        // start, partial-cycle truncation at the end, threshold drift
+        // from VCA gating into release).
         const float* m = mono.data() + start;
         int len = soundingSamples_250ms;
         float thresh = pulseThreshold(m, 0, len);
-        int cycle = 0;
+        std::vector<float> dutyValues;
         int positiveSamples = 0;
         int cycleSamples = 0;
         bool wasAbove = m[0] > thresh;
         bool hadFirstCrossing = false;
-        float minD = 1.f, maxD = 0.f;
-        double sum = 0.0;
 
         for (int i = 1; i < len; i++)
         {
@@ -575,10 +577,7 @@ static void doAnalyze(const char* inputFile)
                 if (hadFirstCrossing && cycleSamples > 10)
                 {
                     float duty = static_cast<float>(positiveSamples) / static_cast<float>(cycleSamples);
-                    minD = std::min(minD, duty);
-                    maxD = std::max(maxD, duty);
-                    sum += duty;
-                    cycle++;
+                    dutyValues.push_back(duty);
                 }
                 hadFirstCrossing = true;
                 positiveSamples = 0;
@@ -587,6 +586,22 @@ static void doAnalyze(const char* inputFile)
             wasAbove = isAbove;
         }
 
+        // Drop first and last cycle. Requires at least 3 collected cycles
+        // to leave 1+ usable cycle in the middle.
+        int cycle = 0;
+        float minD = 1.f, maxD = 0.f;
+        double sum = 0.0;
+        if (dutyValues.size() >= 3)
+        {
+            for (size_t i = 1; i + 1 < dutyValues.size(); i++)
+            {
+                float duty = dutyValues[i];
+                minD = std::min(minD, duty);
+                maxD = std::max(maxD, duty);
+                sum += duty;
+                cycle++;
+            }
+        }
         float meanD = (cycle > 0) ? static_cast<float>(sum / cycle) * 100.f : 0.f;
         printf("manual,%d,%d,%.2f,%.2f,%.2f,%.6f,%.6f,%.6f\n",
                b, cycle, meanD, minD * 100.f, maxD * 100.f, pk.peakPos, pk.peakNeg, pk.rms);
