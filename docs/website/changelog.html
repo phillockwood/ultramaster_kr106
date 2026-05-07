@@ -25,6 +25,22 @@
     <h2>Changelog <a href="index.html">&larr; Back to KR-106</a></h2>
 
     <details open>
+      <summary><span class="ver">2.5.13</span> dacToHz lookup table, DC blocker chain, HPF bass-boost rewrite, chorus ClickRing</summary>
+      <ul>
+        <li>dacToHz now indexes a measured 4096-entry V4 lookup table; drops expf/powf math and captures the BA662/IR3109 exp-converter shape (incl. mid-band bow and DAC bit-boundary INL) better than any closed-form fit</li>
+        <li>Per-voice DC blocker chain: post-DCO and post-VCF stages (1.59 Hz) before the VCA, plus master pre-HPF stage (0.35 Hz) — mirrors hardware AC-coupling cascade, eliminates duty-dependent DC excursions on extreme-PWM patches</li>
+        <li>Voices always run the full DCO -> VCF -> VCA chain regardless of busy state — keeps filter, self-osc, and DC-blocker state coherent across note triggers; no first-sample transient</li>
+        <li>HPF bass-boost rewritten from circuit topology (2-pole / 2-zero biquad, 59/72 Hz poles, 72/170 Hz zeros) — verified against hardware noise sweep at 0.55 dB RMS error</li>
+        <li>Chorus: per-channel ClickRing low-frequency resonance modeled (Chamberlin SVF, ~30 Hz / Q=18) excited by every click event; chorus runs continuously even when bypassed so engagement is click-free; NaN-safe leak path</li>
+        <li>DSP: ROM-accurate voice allocator (FIRST-match-wins restart, matches IC29 ROM); DCO drift restricted to unison mode; floor noise upgraded to pink + 500 Hz shelf to match measured spectrum</li>
+        <li>LFO: auto-mode arm uses gate-only semantics matching IC29 ROM ($030D-$0323 / $036B); arms when keys go up regardless of release tails</li>
+        <li>DCO LFO: inverse-taper patch bytes at load so the analog-pot taper in dcoLfoDepth106 produces the correct depth (J106 patches were dramatically attenuated below the original Roland levels)</li>
+        <li>Variance editor: PW Lo / PW Hi now quantize to 0.25% (was 1%); CHORUS NS uses tapered mapping with dB display matching FLOOR / MAINS NS</li>
+        <li>Voice: dcoNoiseLevel clamped at t&lt;=0 to silence floor when slider at 0</li>
+      </ul>
+    </details>
+
+    <details open>
       <summary><span class="ver">2.5.12</span> DCO DRIFT, variance editor redesign, VCF refit, lower envelope latency</summary>
       <ul>
         <li>Global DCO DRIFT knob: static per-voice offset (sigma=12 cents at max) + slow walk from 3 incommensurate sub-Hz sines (0.07/0.13/0.31 Hz, 3 cents peak)</li>

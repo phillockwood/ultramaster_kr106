@@ -113,8 +113,8 @@ public:
                         text = "-INF dB";
                     else
                     {
-                        float db = 20.f * log10f(knobToMul(knobVal));
-                        text = juce::String(db, 1) + " dB";
+                        int db = juce::roundToInt(20.f * log10f(knobToMul(knobVal)));
+                        text = (db >= 0 ? "+" : "") + juce::String(db) + " dB";
                     }
                 }
                 else
