@@ -100,6 +100,40 @@ public:
   float mVcfSlew      = 0.f;
   float mVcfSlewCoeff = 0.f;
 
+  // Post-DCO DC blocker — models the 10µF coupling cap between DCO
+  // and VCF input. Corner 0.16 Hz (10µF / ~100K VCF input impedance).
+  // Removes duty-dependent DC from the pulse oscillator before the
+  // VCA scales it, which would otherwise produce envelope-shaped DC
+  // excursions audible as thumps on extreme-PWM patches. Runs at
+  // oversampled rate (same as VCF input).
+  float mPostOscDcG = 0.f;
+  float mPostOscDcS = 0.f;
+
+  // Apply post-DCO DC blocker. One-pole TPT high-pass
+  inline float DcBlockPostOsc(float in)
+  {
+    const float v = (in - mPostOscDcS) * mPostOscDcG / (1.f + mPostOscDcG);
+    const float lp = mPostOscDcS + v;
+    mPostOscDcS = lp + v;
+    return in - lp;
+  }
+
+  // Post-VCF DC blocker — models 1µF/100K coupling cap between VCF
+  // and VCA on hardware. Corner 1.59 Hz. Catches any residual DC
+  // that the post-osc blocker hasn't yet removed and any DC the VCF
+  // might introduce, before the VCA scales the signal by the envelope.
+  float mPostVcfDcG = 0.f;
+  float mPostVcfDcS = 0.f;
+
+  // Apply post-VCF DC blocker. One-pole TPT high-pass at 1.59 Hz.
+  inline float DcBlockPostVcf(float in)
+  {
+    const float v = (in - mPostVcfDcS) * mPostVcfDcG / (1.f + mPostVcfDcG);
+    const float lp = mPostVcfDcS + v;
+    mPostVcfDcS = lp + v;
+    return in - lp;
+  }
+
   // Per-voice upsampler pair: 1× → 2× → 4×.
   // Oscillator runs at base rate (cheap); its output is upsampled to
   // 4× before feeding into the VCF. The mix bus then sums all voices
@@ -1039,6 +1073,24 @@ public:
     static constexpr float kVcaSlewTau = 0.000687f; // 687 µs, 1.51ms 10-90% rise
     mVcaSlewCoeff = 1.f - expf(-1.f / (kVcaSlewTau * mSampleRate));
 
+    // Post-DCO DC blocker: 1.59 Hz corner, runs at oversampled rate.
+    // TPT one-pole HPF (out = input - lowpass) for numerical stability
+    // at very low corners.
+    {
+      const float fs = mSampleRate * static_cast<float>(mOversample);
+      const float frq = 1.59f / (fs * 0.5f);   // was 0.16f
+      mPostOscDcG = std::tan(frq * static_cast<float>(M_PI) * 0.5f);
+    }
+    mPostOscDcS = 0.f;
+
+    // Post-VCF DC blocker: same 1.59 Hz corner, also at oversampled rate.
+    {
+      const float fs = mSampleRate * static_cast<float>(mOversample);
+      const float frq = 1.59f / (fs * 0.5f);
+      mPostVcfDcG = std::tan(frq * static_cast<float>(M_PI) * 0.5f);
+    }
+    mPostVcfDcS = 0.f;
+
     // CV path low-pass smoothing, derived from hardware components:
     //   R_thev = (VR28 (0–5K) + R113 (10K)) ∥ R110 (8.2K + 560Ω tempco)
     //          = 5.22K at calibrated WIDTH (VR28 ≈ 2.93K)
@@ -1261,7 +1313,8 @@ public:
           bool sync = false;
           float s = mOscBLEP.Process(cpsOS, pw, mSawOn, mPulseOn, mSubOn, mDcoSub, 0.f, sync);
           s += noise;
-          mixSlot[k] += mVCF.ProcessSample(s) * vcaGain;
+          s = DcBlockPostOsc(s);
+          mixSlot[k] += DcBlockPostVcf(mVCF.ProcessSample(s)) * vcaGain;
           float a = fabsf(s);
           if (a > peak) peak = a;
         }
@@ -1286,23 +1339,23 @@ public:
           float s4[4];
           mOscUp2.process_sample(s4[0], s4[1], s2_0);
           mOscUp2.process_sample(s4[2], s4[3], s2_1);
-        
-          mixSlot[0] += mVCF.ProcessSample(s4[0]) * vcaGain;
-          mixSlot[1] += mVCF.ProcessSample(s4[1]) * vcaGain;
-          mixSlot[2] += mVCF.ProcessSample(s4[2]) * vcaGain;
-          mixSlot[3] += mVCF.ProcessSample(s4[3]) * vcaGain;
+
+          mixSlot[0] += DcBlockPostVcf(mVCF.ProcessSample(DcBlockPostOsc(s4[0]))) * vcaGain;
+          mixSlot[1] += DcBlockPostVcf(mVCF.ProcessSample(DcBlockPostOsc(s4[1]))) * vcaGain;
+          mixSlot[2] += DcBlockPostVcf(mVCF.ProcessSample(DcBlockPostOsc(s4[2]))) * vcaGain;
+          mixSlot[3] += DcBlockPostVcf(mVCF.ProcessSample(DcBlockPostOsc(s4[3]))) * vcaGain;
         }
         else if (mOversample == 2)
         {
           float s2_0, s2_1;
           mOscUp1.process_sample(s2_0, s2_1, oscOut);
-        
-          mixSlot[0] += mVCF.ProcessSample(s2_0) * vcaGain;
-          mixSlot[1] += mVCF.ProcessSample(s2_1) * vcaGain;
+
+          mixSlot[0] += DcBlockPostVcf(mVCF.ProcessSample(DcBlockPostOsc(s2_0))) * vcaGain;
+          mixSlot[1] += DcBlockPostVcf(mVCF.ProcessSample(DcBlockPostOsc(s2_1))) * vcaGain;
         }
         else // 1x — no upsampling
         {
-          mixSlot[0] += mVCF.ProcessSample(oscOut) * vcaGain;
+          mixSlot[0] += DcBlockPostVcf(mVCF.ProcessSample(DcBlockPostOsc(oscOut))) * vcaGain;
         }
       }
     }

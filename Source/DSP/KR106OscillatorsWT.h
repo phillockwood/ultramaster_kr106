@@ -334,6 +334,7 @@ struct OscillatorsWT {
         // construction (difference of two bandlimited saws).
         float pulseShift = mTables->ReadBlended(mPos - mEffPW, mSawTblIdx, mSawTblBlend);
         float pulse = sawAtPos - pulseShift;
+        pulse += (1.f - 2.f * mEffPW);   // duty-dependent DC; downstream HPF removes static portion
         out += pulse * mPulseAmp * mPulseGain;
       }
     }

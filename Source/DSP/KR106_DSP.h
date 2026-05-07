@@ -45,7 +45,11 @@ namespace kr106 {
 // Frequencies from circuit analysis + ngspice simulation (see KR106_HPF.h).
 struct HPF
 {
-  static constexpr float kDCBlockHz = 4.f;
+  // Pre-HPF AC coupling on hardware: 10µF / 44.9K = 0.35 Hz.
+  // (Was 4.f when this was the only DC blocker in the chain. Now redundant
+  // with the 1.59 Hz post-osc and post-VCF blockers per voice; kept here as
+  // the third stage of hardware's three-pole AC-coupling cascade.)
+  static constexpr float kDCBlockHz = 0.35f;
 
   static constexpr int kXfadeSamples = 64; // ~1.5 ms at 44.1k
   // J6 PCHIP curve sampled at 4 switch positions (0/3, 1/3, 2/3, 3/3)
@@ -115,7 +119,7 @@ struct HPF
 
   void Recalc()
   {
-    // DC blocker (~5 Hz)
+    // DC blocker — pre-HPF 10µF/44.9K cap (0.35 Hz)
     float dcFrq = std::clamp(kDCBlockHz / (mSampleRate * 0.5f), 0.f, 0.9f);
     mDcG = tanf(dcFrq * static_cast<float>(M_PI) * 0.5f);
 
@@ -124,7 +128,7 @@ struct HPF
     mG = tanf(frq * static_cast<float>(M_PI) * 0.5f);
   }
 
-  // 1-pole DC blocker: subtract LP at ~5 Hz
+  // 1-pole DC blocker
   float DCBlock(float input, float& dcState)
   {
     float v = (input - dcState) * mDcG / (1.f + mDcG);
@@ -133,14 +137,21 @@ struct HPF
     return input - lp;
   }
 
-  float ProcessWith(float input, float freqHz, float g, float& hpState, float& dcState, BassBoostFilter& boost)
+  float ProcessWith(float input, float freqHz, float g, float& hpState, float& dcState,
+                    BassBoostFilter& boost)
   {
-    if (freqHz < 0.f) return DCBlock(boost.Process(input), dcState);
-    if (freqHz == 0.f) return DCBlock(input, dcState);
-    float v = (input - hpState) * g / (1.f + g);
+    // Pre-HPF AC coupling cap (0.35 Hz) — present in all 4 modes on hardware.
+    float dcBlocked;
+    if (freqHz < 0.f) dcBlocked = DCBlock(boost.Process(input), dcState);
+    else dcBlocked = DCBlock(input, dcState);
+
+    if (freqHz <= 0.f) return dcBlocked; // FLAT or BASS BOOST: no HPF cut
+
+    // HPF cut stage (236 Hz or 754 Hz on J106, etc.)
+    float v = (dcBlocked - hpState) * g / (1.f + g);
     float lp = hpState + v;
     hpState = lp + v;
-    return input - lp;
+    return dcBlocked - lp;
   }
 
   float Process(float input)
@@ -551,21 +562,19 @@ public:
     // (see ic29.txt voice loop at $04D5), and the IR3109 filters
     // continuously self-oscillate at high Q between notes.
     //
-    // J6 / J60 idle voices are skipped — those models use the log-freq
-    // VCF path which does not yet have an idle-processing equivalent.
+    // Always run the full DCO -> VCF -> VCA chain for every voice,
+    // busy or idle. Idle voices have vcaGain == 0 so they contribute
+    // zero to the mix bus, but the DCO continuously feeds the filter
+    // (and the post-osc DC blocker), matching real hardware where
+    // the oscillators free-run regardless of gate state. Keeps filter
+    // state, self-osc, and DC-blocker state coherent across note
+    // triggers — no first-sample transient when a voice (re)triggers.
     for (int vi = 0; vi < mActiveVoices; vi++)
     {
       auto& v = *mVoices[vi];
       v.mLfoEnvAmp = mLFO.mAmp;
-      if (v.GetBusy())
-      {
-        v.ProcessSamplesAccumulating(mModulations.data(), mMixBusOS.data(),
-                                      kNumModulations, 0, nFrames);
-      }
-      else if (v.mModel == kr106::kJ106)
-      {
-        v.ProcessIdleVcfJ106(mModulations.data(), kNumModulations, 0, nFrames);
-      }
+      v.ProcessSamplesAccumulating(mModulations.data(), mMixBusOS.data(),
+                                    kNumModulations, 0, nFrames);
     }
 
     // 1-pole LPF on the oversampled mix bus before decimation.

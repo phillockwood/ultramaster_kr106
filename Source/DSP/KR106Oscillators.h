@@ -214,7 +214,7 @@ struct Oscillators {
       if (mPulseInvert) effPW = 1.f - effPW; // J106: inverted duty cycle
       effPW = std::clamp(effPW, 0.01f, 0.99f);
       float pulse = (mPos < effPW) ? -1.f : 1.f;
-      pulse -= (1.f - 2.f * effPW);   // DC correction: subtract the mean
+      //pulse -= (1.f - 2.f * effPW);   // DC correction: subtract the mean, hardware doesn't DC correct at DCO level thoughpulse
       pulse -= blepAtReset;              // falling edge at reset (shared)
       float pw2 = mPos - effPW;
       if (pw2 < 0.f) pw2 += 1.f;
