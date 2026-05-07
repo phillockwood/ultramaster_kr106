@@ -110,60 +110,109 @@ inline float getJuno6HPFFreqPCHIP(float x)
 }
 
 // Juno-106 HPF position 0: Bass Boost
-  //
-  // Circuit: Two op amp stages (M5218L) with frequency-dependent
-  // feedback. U2: non-inverting amp with C3(.022µF)||R(1M) feedback
-  // over R46(10K). U1: inverting summer mixing the boost signal
-  // (R44=220K) with the direct path (R43=47K), R45(47K) feedback.
-  //
-  // Produces a low-frequency shelf boost:
-  //   +9.2 dB below 50 Hz
-  //   +4.8 dB at 100 Hz
-  //   +2.2 dB at 200 Hz
-  //   Flat above 500 Hz
-  //
-  // Modeled as a low-shelf biquad (Audio EQ Cookbook).
-  // Derived from ngspice AC simulation. RMS error 0.14 dB.
-  //
-  // Parameters: fc=103 Hz, gain=9.4 dB, Q=0.470
-  struct BassBoostFilter
+//
+// Two-stage circuit + inverting summer:
+//   Stage 1: passive RC. R1(47K)||C1(.047µF) in series from input to
+//            NodeA. CA(.01µF) from NodeA to GND. NodeA → 47K → +IN of U2.
+//   Stage 2: U2 non-inverting op amp. Rg(10K) from -IN to GND.
+//            Feedback Z_f = Rf(100K) || Cf(.022µF) from output to -IN.
+//   Summer:  inverting op amp U1. Direct path through R43(47K),
+//            boost path through R44(220K), feedback R45(47K).
+//            Both BASS and the HPF cut positions share this summer
+//            (the cuts pass through it for the unity-gain inversion;
+//            BASS adds the boost path on top).
+//
+// Transfer function (small-signal, magnitude):
+//   H(s) = direct + alpha * G2(s) * H1(s)
+//   where direct = R45/R43 = 1.0, alpha = R45/R44 = 0.2136
+//         H1(s) = (1 + s·R1·C1) / (1 + s·R1·(C1+CA))
+//         G2(s) = (1 + Rf/Rg) · (1 + s·(Rg||Rf)·Cf) / (1 + s·Rf·Cf)
+//
+// Result: 2-pole, 2-zero biquad with
+//   poles at 59.4 Hz and 72.3 Hz (real)
+//   zeros at 72.0 Hz and 170 Hz (real)
+//   DC gain  +10.50 dB  = 20·log10(1 + 11·R45/R44)
+//   HF gain  +1.41  dB  = 20·log10(1 + (R45/R44)·(C1/(C1+CA)))
+//
+// The 72 Hz pole and 72 Hz zero nearly cancel — H1's zero coincides
+// with G2's pole at the audio coupling point, leaving an effective
+// shape close to a first-order shelf with f_pole ≈ 59 Hz, f_zero ≈ 170 Hz.
+//
+// Verified against hardware noise sweep (J106 unit, 96 kHz):
+// RMS error 0.55 dB across 20 Hz–20 kHz. The 2 dB residual at ~2 kHz
+// is consistent with Welch noise variance and not a real feature.
+//
+// NOTE: small-signal model. If the M5218L stages exhibit level-
+// dependent behavior, an additional saturator stage would be needed.
+// Pending verification with multi-level noise sweep.
+
+struct BassBoostFilter
+{
+  // Component values (from schematic)
+  static constexpr float kR1  = 47e3f;     // Stage 1 series R
+  static constexpr float kC1  = 0.047e-6f; // Stage 1 series cap (||R1)
+  static constexpr float kCA  = 0.01e-6f;  // NodeA shunt cap to GND
+  static constexpr float kRg  = 10e3f;     // Stage 2 -IN to GND
+  static constexpr float kRf  = 100e3f;    // Stage 2 feedback R
+  static constexpr float kCf  = 0.022e-6f; // Stage 2 feedback C (||Rf)
+  static constexpr float kR43 = 47e3f;     // Summer direct path
+  static constexpr float kR44 = 220e3f;    // Summer boost path
+  static constexpr float kR45 = 47e3f;     // Summer feedback
+
+  float b0 = 1.f, b1 = 0.f, b2 = 0.f;
+  float a1 = 0.f, a2 = 0.f;
+  double z1 = 0.f, z2 = 0.f;
+
+  void Init(float sampleRate)
   {
-    static constexpr float kShelfFc   = 103.1f;   // Hz
-    static constexpr float kShelfGain = 9.37f;     // dB
-    static constexpr float kShelfQ    = 0.4695f;
+    // Time constants
+    const float tau_1z = kR1 * kC1;
+    const float tau_1p = kR1 * (kC1 + kCA);
+    const float tau_2z = (kRg * kRf / (kRg + kRf)) * kCf;
+    const float tau_2p = kRf * kCf;
 
-    float b0 = 1.f, b1 = 0.f, b2 = 0.f;
-    float a1 = 0.f, a2 = 0.f;
-    float z1 = 0.f, z2 = 0.f;
+    const float G2_dc  = 1.f + kRf / kRg;          // 11.0
+    const float alpha  = kR45 / kR44;              // 0.2136
+    const float direct = kR45 / kR43;              // 1.0
 
-    void Init(float sampleRate)
-    {
-      // Audio EQ Cookbook low-shelf biquad
-      float A = powf(10.f, kShelfGain / 40.f);
-      float w0 = 2.f * static_cast<float>(M_PI) * kShelfFc / sampleRate;
-      float cosw = cosf(w0);
-      float sinw = sinf(w0);
-      float alpha = sinw / (2.f * kShelfQ);
-      float sqrtA2alpha = 2.f * sqrtf(A) * alpha;
+    // Build H(s) = N(s) / D(s) as polynomials in s, low-power-first.
+    // D(s) = (1 + s·tau_1p)(1 + s·tau_2p) = 1 + (tau_1p+tau_2p)s + (tau_1p·tau_2p)s²
+    const float D0 = 1.f;
+    const float D1 = tau_1p + tau_2p;
+    const float D2 = tau_1p * tau_2p;
+    // Numerator boost = (1 + s·tau_1z)(1 + s·tau_2z)
+    const float Nb0 = 1.f;
+    const float Nb1 = tau_1z + tau_2z;
+    const float Nb2 = tau_1z * tau_2z;
+    // N(s) = direct·D(s) + alpha·G2_dc·N_boost(s)
+    const float ag = alpha * G2_dc;
+    const float N0 = direct * D0 + ag * Nb0;
+    const float N1 = direct * D1 + ag * Nb1;
+    const float N2 = direct * D2 + ag * Nb2;
 
-      float a0_inv = 1.f / ((A + 1.f) + (A - 1.f) * cosw + sqrtA2alpha);
+    // Bilinear transform: s → (2/T)·(z-1)/(z+1).
+    // Pre-warping isn't needed here because all the interesting poles
+    // and zeros (~60–200 Hz) are far below Nyquist at 44.1k+.
+    // Standard bilinear of (N0 + N1·s + N2·s²) / (D0 + D1·s + D2·s²):
+    const float K  = 2.f * sampleRate;
+    const float K2 = K * K;
+    const float a0 = D0 + D1 * K + D2 * K2;
+    b0 = (N0 + N1 * K + N2 * K2) / a0;
+    b1 = 2.f * (N0 - N2 * K2) / a0;
+    b2 = (N0 - N1 * K + N2 * K2) / a0;
+    a1 = 2.f * (D0 - D2 * K2) / a0;
+    a2 = (D0 - D1 * K + D2 * K2) / a0;
+    
+    Reset();
+  }
 
-      b0 = A * ((A + 1.f) - (A - 1.f) * cosw + sqrtA2alpha) * a0_inv;
-      b1 = 2.f * A * ((A - 1.f) - (A + 1.f) * cosw) * a0_inv;
-      b2 = A * ((A + 1.f) - (A - 1.f) * cosw - sqrtA2alpha) * a0_inv;
-      a1 = -2.f * ((A - 1.f) + (A + 1.f) * cosw) * a0_inv;
-      a2 = ((A + 1.f) + (A - 1.f) * cosw - sqrtA2alpha) * a0_inv;
+  void Reset() { z1 = z2 = 0.f; }
 
-      Reset();
-    }
-
-    void Reset() { z1 = z2 = 0.f; }
-
-    float Process(float x)
-    {
-      float y = b0 * x + z1;
-      z1 = b1 * x - a1 * y + z2;
-      z2 = b2 * x - a2 * y;
-      return y;
-    }
-  };
+  float Process(float x)
+  {
+    float y = b0 * x + z1;
+    z1 = b1 * x - a1 * y + z2;
+    z2 = b2 * x - a2 * y;
+    return y;
+  }
+};

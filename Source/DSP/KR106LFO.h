@@ -362,7 +362,6 @@ struct LFO
   // For J106, this handles the arm/reset logic that was in Process() for J6.
   void UpdateGateState()
   {
-    bool newState = mActive || mTrigger;
     bool gated = mGated || mTrigger;
 
     if (mMode == 1)
